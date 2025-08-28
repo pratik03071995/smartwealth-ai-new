@@ -1,0 +1,9 @@
+version: "2"
+authtoken: YOUR_AUTH_TOKEN_HERE
+tunnels:
+  smartwealth:
+    proto: http
+    addr: 5173
+    # Uncomment the line below if you have a paid plan
+    # subdomain: smartwealth-ai
+    inspect: true

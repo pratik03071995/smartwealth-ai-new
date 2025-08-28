@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; }
+* { box-sizing: border-box; }
+
+.glass {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(10px);
+}
+.gradient-text {
+  background: linear-gradient(90deg, #b18cff 0%, #7b5bfb 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Subtle custom scrollbar for chat */
+.scroll-slim::-webkit-scrollbar { width: 8px; }
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(177,140,255,0.6), rgba(123,91,251,0.4));
+  border-radius: 999px;
+}
+.scroll-slim {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(177,140,255,0.6) transparent;
+}
