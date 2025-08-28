@@ -2,28 +2,56 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
+:root { color-scheme: light; }
 html, body, #root { height: 100%; }
 * { box-sizing: border-box; }
 
-.glass {
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.08);
-  backdrop-filter: blur(10px);
-}
-.gradient-text {
-  background: linear-gradient(90deg, #b18cff 0%, #7b5bfb 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+/* ---------- THEME TOKENS (Warm Light default) ---------- */
+:root {
+  --bg: #f8f7f4;             /* warm ivory background */
+  --text: #1a1a1a;           /* softer deep gray text */
+  --muted: #6b6b6b;          /* warm muted taupe */
+  --panel: rgba(28,28,28,0.04);
+  --border: rgba(28,28,28,0.12);
+
+  --brand1: #7b5bfb;          /* purple gradient start */
+  --brand2: #b18cff;          /* purple gradient end */
+  --accent-green: #16a34a;    /* up */
+  --accent-red: #dc2626;      /* down */
+  --btnText: #1a1a1a;         /* dark text on light buttons */
 }
 
-/* Subtle custom scrollbar for chat */
+/* Dark overrides stay the same */
+.dark {
+  color-scheme: dark;
+  --bg: #0b0c10;
+  --text: #ffffff;
+  --muted: #a7a3ff;
+  --panel: rgba(255,255,255,0.06);
+  --border: rgba(255,255,255,0.10);
+
+  --brand1: #7b5bfb;
+  --brand2: #b18cff;
+  --accent-green: #22c55e;
+  --accent-red: #ef4444;
+  --btnText: #000;
+}
+
+/* Utilities */
+.gradient-text {
+  background: linear-gradient(90deg, var(--brand2) 0%, var(--brand1) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+
+.glass {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+}
+
 .scroll-slim::-webkit-scrollbar { width: 8px; }
 .scroll-slim::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(177,140,255,0.6), rgba(123,91,251,0.4));
+  background: linear-gradient(180deg, var(--brand2), var(--brand1));
   border-radius: 999px;
 }
-.scroll-slim {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(177,140,255,0.6) transparent;
-}
+.scroll-slim { scrollbar-width: thin; scrollbar-color: var(--brand2) transparent; }

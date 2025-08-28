@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import Chat from '../components/Chat'
 
 export default function Home() {
@@ -8,7 +8,7 @@ export default function Home() {
         <h1 className="mb-3 text-[28px] font-extrabold leading-tight md:text-[40px]">
           Create <span className="gradient-text">Wealth</span> With Just a Prompt
         </h1>
-        <p className="mb-6 text-sm md:text-base text-white/70">
+        <p className="mb-6 text-sm md:text-base text-[var(--muted)]">
           Type a prompt, get insights instantly. Earnings, scores, sectors — powered by AI.
         </p>
       </div>
@@ -30,6 +30,7 @@ function Terminal() {
   const [lineIndex, setLineIndex] = useState(0)
   const [typed, setTyped] = useState('')
   const [isDone, setIsDone] = useState(false)
+
   useEffect(() => {
     if (lineIndex >= LINES.length) { setIsDone(true); return }
     const target = LINES[lineIndex]
@@ -42,16 +43,16 @@ function Terminal() {
   }, [lineIndex])
 
   return (
-    <div className="mx-auto mb-6 max-w-xl rounded-2xl border border-white/10 bg-white/5 p-3 shadow-[0_0_24px_-10px_rgba(177,140,255,0.8)] backdrop-blur">
-      <div className="mb-1 flex items-center gap-2 text-[10px] text-white/60">
+    <div className="mx-auto mb-6 max-w-xl rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-3 shadow-glow backdrop-blur">
+      <div className="mb-1 flex items-center gap-2 text-[10px] text-[var(--muted)]">
         <div className="h-2 w-2 rounded-full bg-red-500/80" />
         <div className="h-2 w-2 rounded-full bg-yellow-500/80" />
         <div className="h-2 w-2 rounded-full bg-green-500/80" />
         <span className="ml-auto">smartwealth-terminal</span>
       </div>
-      <div className="rounded-xl bg-black/40 p-3 text-xs leading-relaxed text-green-300/90 min-h-[100px]">
+      <div className="rounded-xl bg-black/10 dark:bg-black/40 p-3 text-xs leading-relaxed text-green-700 dark:text-green-300 min-h-[100px]">
         {LINES.slice(0, lineIndex).map((l, i) => <div key={i}>{l}</div>)}
-        {lineIndex < LINES.length && (<div>{typed}<span className="ml-1 inline-block w-2 animate-pulse border-b-2 border-green-300/90" /></div>)}
+        {lineIndex < LINES.length && (<div>{typed}<span className="ml-1 inline-block w-2 animate-pulse border-b-2 border-green-700 dark:border-green-300" /></div>)}
         {isDone && <div className="opacity-70">(Done)</div>}
       </div>
     </div>
