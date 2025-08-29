@@ -2,8 +2,8 @@ import React, { useRef, useState, useEffect } from 'react'
 import axios from 'axios'
 import { motion } from 'framer-motion'
 import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Brush, Legend, ReferenceLine
-} from 'recharts'
+  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Legend, ReferenceLine
+} from 'recharts' // <-- Brush removed
 
 const api = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
 type Msg = { role: 'user' | 'assistant', content: string }
@@ -37,7 +37,7 @@ export default function Chat() {
       setGraphTitle('AAPL – Last 5 Years (Demo)')
       setGraphData(buildDemoSeries())
       setGraphOpen(true)
-      setGraphReady(false); setTimeout(() => setGraphReady(true), 50)
+      setGraphReady(false); setTimeout(() => setGraphReady(true), 50) // ensure modal paints before chart mounts
       return true
     }
     return false
@@ -49,7 +49,6 @@ export default function Chat() {
     setInput('')
     const didGraph = maybeOpenGraph(text)
     setMessages(m => [...m, { role: 'user', content: text }])
-
     try {
       const { data } = await axios.post(`${api}/api/chat`, { message: text })
       setMessages(m => [...m, { role: 'assistant', content: didGraph ? 'Opening a 5-year interactive chart…' : data.reply }])
@@ -91,9 +90,10 @@ export default function Chat() {
 
       {/* Chart Modal */}
       {graphOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur" onClick={() => setGraphOpen(false)} />
-          <div className="relative z-10 w-full max-w-4xl rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-5 shadow-glow">
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">  {/* higher z-index */}
+          {/* darker overlay so text behind is not readable */}
+          <div className="absolute inset-0 bg-black/80 backdrop-blur" onClick={() => setGraphOpen(false)} />
+          <div className="relative z-[1001] w-full max-w-4xl rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-5 shadow-glow">
             <div className="mb-3 flex items-center justify-between">
               <div className="text-lg font-semibold">{graphTitle}</div>
               <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
@@ -103,9 +103,10 @@ export default function Chat() {
               </div>
             </div>
 
-            <div className="h-[380px] w-full">
+            {/* Solid chart background to avoid any see-through */}
+            <div className="h-[380px] w-full rounded-xl bg-[var(--bg)] p-1">
               {graphReady ? (
-                <ResponsiveContainer width="100%" height="100%" key={graphOpen ? 'open' : 'closed'}>
+                <ResponsiveContainer width="100%" height="100%" key={graphOpen ? 'open' : 'closed'} >
                   <AreaChart data={graphData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="swFill" x1="0" y1="0" x2="0" y2="1">
@@ -113,11 +114,11 @@ export default function Chat() {
                         <stop offset="100%" stopColor="var(--brand1)" stopOpacity={0.12} />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid stroke="rgba(255,255,255,0.09)" />
+                    <CartesianGrid stroke="rgba(0,0,0,0.08)" className="dark:stroke-[rgba(255,255,255,0.09)]" />
                     <XAxis dataKey="t" stroke="var(--muted)" fontSize={10} minTickGap={24} />
                     <YAxis stroke="var(--muted)" fontSize={10} domain={['auto', 'auto']} />
                     <Tooltip
-                      cursor={{ stroke: 'rgba(255,255,255,0.3)', strokeWidth: 1 }}
+                      cursor={{ stroke: 'rgba(255,255,255,0.25)', strokeWidth: 1 }}
                       contentStyle={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 12, color: 'var(--text)' }}
                       formatter={(v: any) => [`$${Number(v).toFixed(2)}`, 'Value']}
                       labelStyle={{ color: 'var(--muted)' }}
@@ -125,7 +126,7 @@ export default function Chat() {
                     <Legend verticalAlign="top" height={24} wrapperStyle={{ color: 'var(--text)' }} />
                     <ReferenceLine y={graphData.length ? graphData[graphData.length - 1].v : undefined} stroke="var(--accent-green)" strokeDasharray="4 4" opacity={0.6} />
                     <Area type="monotone" name="AAPL (demo)" dataKey="v" stroke="var(--accent-green)" fill="url(#swFill)" strokeWidth={2.2} activeDot={{ r: 4 }} />
-                    <Brush height={22} travellerWidth={10} stroke="var(--brand1)" fill="rgba(167,139,250,0.1)" />
+                    {/* Brush removed */}
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (

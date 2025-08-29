@@ -14,7 +14,8 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "moduleResolution": "bundler",
-    "strict": true
+    "strict": true,
+    "types": ["vite/client"]
   },
   "include": [
     "src"

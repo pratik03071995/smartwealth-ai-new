@@ -42,15 +42,6 @@ export default function App() {
             <span className="gradient-text font-black">SmartWealth</span> <span className="opacity-70">AI</span>
           </Link>
 
-          {/* Theme Toggle */}
-          <button
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            className="rounded-xl px-3 py-2 text-sm border border-[var(--border)] bg-[var(--panel)] hover:opacity-90"
-            aria-label="Toggle theme"
-            title="Toggle light/dark"
-          >
-            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
-          </button>
         </div>
       </header>
 
@@ -113,10 +104,20 @@ export default function App() {
               <li><Link className="hover:underline" to="/sectors">Sectors</Link></li>
             </ul>
           </div>
-          <div>
-            <div className="text-[var(--muted)]">Shortcuts</div>
-            <ul className="mt-2 space-y-1"><li>⌘K / Ctrl+K – Toggle menu</li></ul>
-          </div>
+          <div className="flex flex-col items-center md:items-end gap-3">
+          <div className="text-[var(--muted)]">Shortcuts</div>
+          <ul className="space-y-1 text-sm">
+            <li>⌘K / Ctrl+K – Toggle menu</li>
+          </ul>
+          {/* Theme Toggle in footer */}
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="mt-2 rounded-xl px-3 py-2 text-sm border border-[var(--border)] bg-[var(--panel)] hover:opacity-90"
+          >
+            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+          </button>
+        </div>
+
         </div>
         <div className="border-t border-[var(--border)] py-4 text-center text-xs text-[var(--muted)]">
           © {new Date().getFullYear()} SmartWealth AI. All rights reserved.
