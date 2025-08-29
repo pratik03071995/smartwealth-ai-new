@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 type Row = {
   company: string;
   ticker: string;
-  relation_type: string; // "supplier" | "customer" | others
+  relation_type: string;
   counterparty_name: string;
   counterparty_type?: string;
   tier?: string | number;
@@ -119,7 +119,7 @@ function CompanyCombobox({
   }, []);
 
   return (
-    <div ref={ref} className="relative z-[1000]"> {/* keep above canvas */}
+    <div ref={ref} className="relative z-[1000]">
       <label className="text-xs text-[var(--muted)]">{label}</label>
       <div className="mt-1 flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2">
         <input
@@ -129,7 +129,7 @@ function CompanyCombobox({
             if (!open) setOpen(true);
           }}
           onFocus={() => setOpen(true)}
-          onBlur={() => setTimeout(() => setOpen(false), 120)} // allow option mousedown to fire
+          onBlur={() => setTimeout(() => setOpen(false), 120)}
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
               e.preventDefault();
@@ -459,7 +459,7 @@ export default function Vendors() {
         </div>
       </div>
 
-      {/* Controls (isolated layer above canvas) */}
+      {/* Controls */}
       <div
         className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-12 relative z-[1000]"
         style={{ transform: `scale(${zoom})`, transformOrigin: "top left", isolation: "isolate" }}
@@ -523,14 +523,14 @@ export default function Vendors() {
         <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <div className="mb-2 text-sm text-[var(--muted)]">Loading vendor network…</div>
           <div className="relative h-3 overflow-hidden rounded-full" style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))" }}>
-            <div className="absolute inset-y-0 left-0 w-1/3 animate-[sweep_4s_linear_infinite] rounded-full" style={{ background: "linear-gradient(90deg, rgba(255,255,255,.8), rgba(255,255,255,.2))" }} />
+            <div className="absolute inset-y-0 left-0 w-1/3 animate-[sweep_12s_linear_infinite] rounded-full" style={{ background: "linear-gradient(90deg, rgba(255,255,255,.8), rgba(255,255,255,.15))" }} />
           </div>
           <style>{`@keyframes sweep { 0% { transform: translateX(-100%);} 100% { transform: translateX(260%);} }`}</style>
         </div>
       )}
       {err && <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm">Error: {err}</div>}
 
-      {/* Canvas (z-0 so menus overlay properly) */}
+      {/* Canvas */}
       {selected ? (
         <NetworkCanvas selected={selected} graph={graph} />
       ) : (
@@ -539,7 +539,7 @@ export default function Vendors() {
 
       <Legend suppliers={graph.counts?.suppliers || 0} customers={graph.counts?.customers || 0} />
 
-      {/* Data table */}
+      {/* Table */}
       {selected && (
         <div className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <div className="mb-2 text-sm font-semibold">Underlying rows ({filtered.length})</div>
@@ -583,7 +583,7 @@ export default function Vendors() {
   );
 }
 
-/* ================= Graph canvas (centered; arrow in middle) ================= */
+/* ================= Graph canvas (centered; slow; icons) ================= */
 function NetworkCanvas({
   selected,
   graph,
@@ -609,8 +609,8 @@ function NetworkCanvas({
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const d = e.deltaY > 0 ? -0.08 : 0.08;
-      setZoom((z) => Math.max(0.7, Math.min(1.6, z + d)));
+      const d = e.deltaY > 0 ? -0.06 : 0.06;
+      setZoom((z) => Math.max(0.7, Math.min(1.5, z + d)));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -629,7 +629,7 @@ function NetworkCanvas({
             −
           </button>
           <span className="w-10 text-center text-xs">{Math.round(zoom * 100)}%</span>
-          <button className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5" onClick={() => setZoom((z) => Math.min(1.6, z + 0.1))}>
+          <button className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5" onClick={() => setZoom((z) => Math.min(1.5, z + 0.1))}>
             +
           </button>
           <button className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5" onClick={() => setZoom(1)}>
@@ -638,36 +638,63 @@ function NetworkCanvas({
         </div>
       </div>
 
-      {/* center the SVG area and keep it smaller */}
-      <div className="relative mx-auto max-w-3xl overflow-hidden rounded-xl bg-white/3">
-        <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`} className="block">
-          <defs>
-            {/* neutral arrowheads (we'll use custom mid arrows instead) */}
-          </defs>
+      {/* Centered, with subtle drifting particles behind */}
+      <div className="relative mx-auto max-w-3xl overflow-hidden rounded-xl bg-[var(--bg)]/40">
+        {/* particle layer */}
+        <div className="pointer-events-none absolute inset-0">
+          <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`}>
+            <g className="opacity-40">
+              {Array.from({ length: 24 }).map((_, i) => {
+                const x = (i * 97) % W;
+                const y = (i * 53) % H;
+                const r = 0.8 + ((i * 7) % 8) / 10;
+                const d = 40 + (i % 10) * 8; // duration variance
+                return (
+                  <circle
+                    key={i}
+                    cx={x}
+                    cy={y}
+                    r={r}
+                    fill="white"
+                    opacity="0.45"
+                    style={{ animation: `drift ${d}s linear infinite`, transformOrigin: `${x}px ${y}px` }}
+                  />
+                );
+              })}
+            </g>
+          </svg>
+          <style>{`
+            @keyframes drift {
+              0% { transform: translateY(0px); opacity:.35; }
+              50% { transform: translateY(-8px); opacity:.55; }
+              100% { transform: translateY(0px); opacity:.35; }
+            }
+          `}</style>
+        </div>
 
-          {/* IMPORTANT: one translate to center the coordinate system */}
+        <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`} className="block relative">
+          {/* single translate keeps graph perfectly centered */}
           <g transform={`translate(${W / 2} ${H / 2}) scale(${zoom})`}>
-            {/* links (dashed) + MIDPOINT ARROW */}
+            {/* Links + very slow dash + midpoint arrow + tiny role chip */}
             {graph.links.map((l, i) => {
               const s = graph.nodes.find((n) => n.id === l.source)!;
               const t = graph.nodes.find((n) => n.id === l.target)!;
               const sel = hover && (hover === s.id || hover === t.id);
 
-              // line endpoints in centered coords
               const x1 = s.x, y1 = s.y, x2 = t.x, y2 = t.y;
-
-              // midpoint + angle for arrow
               const mx = (x1 + x2) / 2;
               const my = (y1 + y2) / 2;
               const ang = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
 
-              // small arrow polygon centered at (mx,my)
               const arrowSize = 7;
               const poly = [
                 { x: 0, y: 0 },
                 { x: -arrowSize, y: arrowSize * 0.6 },
                 { x: -arrowSize, y: -arrowSize * 0.6 },
               ];
+
+              // tiny role chip background
+              const chip = l.side === "supplier" ? "📦" : "👥";
 
               return (
                 <g key={i}>
@@ -677,11 +704,12 @@ function NetworkCanvas({
                     x2={x2}
                     y2={y2}
                     stroke="var(--text)"
-                    strokeOpacity={sel ? 0.9 : 0.55}
+                    strokeOpacity={sel ? 0.9 : 0.45}
                     strokeWidth={sel ? l.weight + 1.2 : l.weight}
-                    strokeDasharray="6 10"
-                    style={{ animation: "flow 4s linear infinite" }}
+                    strokeDasharray="8 14"
+                    style={{ animation: "flow 12s linear infinite" }}
                   />
+                  {/* center arrow */}
                   <g transform={`translate(${mx} ${my}) rotate(${ang})`}>
                     <polygon
                       points={poly.map((p) => `${p.x},${p.y}`).join(" ")}
@@ -689,23 +717,35 @@ function NetworkCanvas({
                       opacity={sel ? 0.9 : 0.7}
                     />
                   </g>
+                  {/* role chip (subtle) */}
+                  <g transform={`translate(${mx + 10 * Math.cos((ang * Math.PI) / 180)} ${my + 10 * Math.sin((ang * Math.PI) / 180)})`}>
+                    <foreignObject x={-8} y={-8} width="16" height="16">
+                      <div className="h-4 w-4 text-[10px] leading-[16px] text-center rounded-full bg-[var(--panel)]/80 border border-[var(--border)]">
+                        {chip}
+                      </div>
+                    </foreignObject>
+                  </g>
                 </g>
               );
             })}
 
-            {/* nodes (use centered coords directly) */}
+            {/* Nodes */}
             {graph.nodes.map((n) => {
               const cx = n.x, cy = n.y;
               const isCenter = n.side === "center";
               const r = isCenter ? 26 : Math.max(9, Math.min(28, n.rPx));
+              const glow = hover === n.id ? "0 0 22px rgba(255,255,255,.25)" : "none";
+
               return (
                 <g
                   key={n.id}
                   onMouseEnter={() => setHover(n.id)}
                   onMouseLeave={() => setHover(null)}
                   onClick={() => !isCenter && setModalNode(n)}
-                  style={{ cursor: isCenter ? "default" : "pointer" }}
+                  style={{ cursor: isCenter ? "default" : "pointer", filter: `drop-shadow(${glow})` }}
                 >
+                  {/* subtle halo ring */}
+                  <circle cx={cx} cy={cy} r={r + 4} fill="transparent" stroke="white" strokeOpacity={hover === n.id ? 0.18 : 0.08} />
                   <circle cx={cx} cy={cy} r={r} fill="var(--panel)" stroke="var(--border)" strokeWidth={1} />
                   {isCenter ? (
                     <foreignObject x={cx - 16} y={cy - 16} width="32" height="32">
@@ -731,10 +771,12 @@ function NetworkCanvas({
             })}
           </g>
 
-          <style>{`@keyframes flow { to { stroke-dashoffset: -260; } }`}</style>
+          <style>{`
+            @keyframes flow { to { stroke-dashoffset: -400; } }
+          `}</style>
         </svg>
 
-        {/* tooltip pinned near bottom center (simple + readable) */}
+        {/* tooltip */}
         {tipNode && (
           <div
             className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg border border-[var(--border)] bg-[var(--panel)]/95 px-2 py-1 text-[11px]"
@@ -774,6 +816,9 @@ function Legend({ suppliers, customers }: { suppliers: number; customers: number
       </span>
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-2 w-6 rounded bg-white/40" /> Arrow width = relationship strength
+      </span>
+      <span className="inline-flex items-center gap-2">
+        <span className="inline-block h-2 w-6 rounded bg-white/40" /> Mid-arrow indicates flow
       </span>
     </div>
   );
