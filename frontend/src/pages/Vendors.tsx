@@ -16,6 +16,9 @@ type Row = {
   start_year?: number | string;
   notes?: string;
   is_dummy?: boolean | number | string;
+  // If your table later adds a counterparty ticker, these will be picked up automatically
+  counterparty_ticker?: string;
+  cp_ticker?: string;
 };
 type VendorsResp = { count: number; items: Row[]; cached_at?: string; error?: string };
 
@@ -40,9 +43,9 @@ const title = (s?: string) => (s || "").trim();
 const uniq = (arr: (string | number | undefined | null)[]) =>
   Array.from(new Set(arr.map((x) => (x == null ? "" : String(x).trim())).filter(Boolean)));
 
-function logoProviders(symbol: string) {
+function logoProvidersFromTicker(symbol: string) {
   const sym = (symbol || "").toUpperCase().trim();
-  const a = `https://img.logo.dev/ticker/${encodeURIComponent(sym)}?size=64`;
+  const a = `https://img.logo.dev/ticker/${encodeURIComponent(sym)}?size=128`;
   const b = `https://storage.googleapis.com/iex/api/logos/${encodeURIComponent(sym)}.png`;
   return [a, b];
 }
@@ -62,6 +65,136 @@ function normalizeRel(rel: string) {
   if (t.includes("supplier")) return "supplier";
   if (t.includes("customer")) return "customer";
   return rel || "other";
+}
+const looksGlobal = (regions?: string[] | string) => {
+  const s = Array.isArray(regions) ? regions.join(" ").toLowerCase() : String(regions || "").toLowerCase();
+  return /global|worldwide|intl|international/.test(s);
+};
+
+/* ================= Logo resolution (counterparties) ================= */
+type LogoCache = Record<string, string | null>;
+const LS_KEY = "vendorLogoCache_v1";
+const memLogo = new Map<string, string | null>();
+
+function readLsCache(): LogoCache {
+  try {
+    return JSON.parse(localStorage.getItem(LS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+function writeLsCache(c: LogoCache) {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(c));
+  } catch {}
+}
+function extractTickerFromName(name: string): string | null {
+  // e.g., "Samsung (005930.KS)" or "Pegatron (4938.TW)" or "Seagate (STX)"
+  const m = name.match(/\(([A-Z][A-Z0-9.\-]{1,12})\)/);
+  return m ? m[1] : null;
+}
+function probeImage(url: string): Promise<boolean> {
+  return new Promise((res) => {
+    const img = new Image();
+    img.onload = () => res(true);
+    img.onerror = () => res(false);
+    img.src = url;
+  });
+}
+
+/** Resolve a best-guess logo URL for a company name or ticker, cached. */
+function useLogo(name: string, tickerHint?: string) {
+  const key = (tickerHint?.toUpperCase() || name.toLowerCase().trim());
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function run() {
+      if (!key) {
+        setUrl(null);
+        return;
+      }
+      // mem cache
+      if (memLogo.has(key)) {
+        setUrl(memLogo.get(key) || null);
+        return;
+      }
+      // ls cache
+      const ls = readLsCache();
+      if (ls[key] !== undefined) {
+        memLogo.set(key, ls[key]);
+        setUrl(ls[key]);
+        return;
+      }
+
+      // Build candidates
+      const cands: string[] = [];
+
+      const ticker =
+        (tickerHint || "").toUpperCase().trim() ||
+        extractTickerFromName(name) ||
+        "";
+
+      if (ticker) {
+        cands.push(...logoProvidersFromTicker(ticker));
+      }
+
+      // Clearbit autocomplete (domain & direct logo)
+      try {
+        const resp = await fetch(
+          `https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(name)}`,
+          { mode: "cors" }
+        );
+        if (resp.ok) {
+          const js = await resp.json();
+          if (js && js[0]?.logo) {
+            cands.unshift(js[0].logo as string);
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // Try candidates in sequence
+      for (const u of cands) {
+        const ok = await probeImage(u);
+        if (ok) {
+          if (!cancelled) {
+            memLogo.set(key, u);
+            const next = { ...ls, [key]: u };
+            writeLsCache(next);
+            setUrl(u);
+          }
+          return;
+        }
+      }
+
+      if (!cancelled) {
+        memLogo.set(key, null);
+        const next = { ...ls, [key]: null };
+        writeLsCache(next);
+        setUrl(null);
+      }
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [key, name, tickerHint]);
+
+  return url;
+}
+
+/* Small globe icon for "global" fallback */
+function Globe({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className="opacity-80">
+      <circle cx="12" cy="12" r="10" fill="none" stroke="var(--text)" strokeWidth="1.5" />
+      <path d="M3 12h18M12 2c3.5 4 3.5 16 0 20M12 2c-3.5 4-3.5 16 0 20" fill="none" stroke="var(--text)" strokeWidth="1.2" />
+    </svg>
+  );
 }
 
 /* ================= Graph types ================= */
@@ -119,7 +252,7 @@ function CompanyCombobox({
   }, []);
 
   return (
-    <div ref={ref} className="relative z-[1000]">
+    <div ref={ref} className="relative z-[1100]">
       <label className="text-xs text-[var(--muted)]">{label}</label>
       <div className="mt-1 flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2">
         <input
@@ -155,20 +288,24 @@ function CompanyCombobox({
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               onPick("");
-              setQ("");
             }}
             title="Clear"
           >
             ×
           </button>
         )}
-        <button className="ml-auto text-[var(--muted)] hover:text-white/80" onMouseDown={(e)=>e.preventDefault()} onClick={() => setOpen((o) => !o)} title="Toggle">
+        <button
+          className="ml-auto text-[var(--muted)] hover:text-white/80"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setOpen((o) => !o)}
+          title="Toggle"
+        >
           ▾
         </button>
       </div>
       {open && (
         <div
-          className="absolute z-[1100] mt-2 max-h-72 w-full overflow-auto rounded-xl border border-[var(--border)] bg-[var(--panel)] p-1 shadow-2xl"
+          className="absolute z-[1200] mt-2 max-h-72 w-full overflow-auto rounded-xl border border-[var(--border)] bg-[var(--panel)] p-1 shadow-2xl"
           style={{ boxShadow: "0 12px 50px rgba(0,0,0,.35)" }}
         >
           {filtered.length === 0 ? (
@@ -583,7 +720,34 @@ export default function Vendors() {
   );
 }
 
-/* ================= Graph canvas (centered; slow; icons) ================= */
+/* =============== Node badge with logo logic (used inside canvas loop) =============== */
+function NodeBadge({
+  name,
+  size,
+  regions,
+  tickerHint,
+}: {
+  name: string;
+  size: number;
+  regions?: string[];
+  tickerHint?: string;
+}) {
+  const url = useLogo(name, tickerHint);
+  const isGlobal = looksGlobal(regions || []);
+  if (url) {
+    return <img src={url} alt={name} className="h-full w-full object-contain" />;
+  }
+  if (isGlobal) {
+    return (
+      <div className="flex h-full w-full items-center justify-center">
+        <Globe size={Math.max(12, Math.min(22, size - 6))} />
+      </div>
+    );
+  }
+  return <TickerGlyph text={name} />;
+}
+
+/* ================= Graph canvas (centered; very slow; logos) ================= */
 function NetworkCanvas({
   selected,
   graph,
@@ -601,7 +765,7 @@ function NetworkCanvas({
   const H = graph.dim?.H ?? 420;
 
   const [logoIdx, setLogoIdx] = useState(0);
-  const providers = useMemo(() => logoProviders(selected.ticker), [selected.ticker]);
+  const centerLogoCandidates = useMemo(() => logoProvidersFromTicker(selected.ticker), [selected.ticker]);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   useEffect(() => {
@@ -619,7 +783,7 @@ function NetworkCanvas({
   const tipNode = hover ? graph.nodes.find((n) => n.id === hover) : null;
 
   return (
-    <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-3 relative z-0">
+    <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--bg)]/[0.22] p-3 relative z-0">
       <div className="mb-2 flex items-center justify-between">
         <div className="text-sm font-semibold">
           {selected.company} ({selected.ticker})
@@ -638,17 +802,17 @@ function NetworkCanvas({
         </div>
       </div>
 
-      {/* Centered, with subtle drifting particles behind */}
-      <div className="relative mx-auto max-w-3xl overflow-hidden rounded-xl bg-[var(--bg)]/40">
+      {/* Centered, lighter panel with soft particles */}
+      <div className="relative mx-auto max-w-3xl overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--panel)]/35">
         {/* particle layer */}
         <div className="pointer-events-none absolute inset-0">
           <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`}>
-            <g className="opacity-40">
+            <g className="opacity-35">
               {Array.from({ length: 24 }).map((_, i) => {
                 const x = (i * 97) % W;
                 const y = (i * 53) % H;
                 const r = 0.8 + ((i * 7) % 8) / 10;
-                const d = 40 + (i % 10) * 8; // duration variance
+                const d = 42 + (i % 10) * 9;
                 return (
                   <circle
                     key={i}
@@ -665,17 +829,17 @@ function NetworkCanvas({
           </svg>
           <style>{`
             @keyframes drift {
-              0% { transform: translateY(0px); opacity:.35; }
-              50% { transform: translateY(-8px); opacity:.55; }
-              100% { transform: translateY(0px); opacity:.35; }
+              0% { transform: translateY(0px); opacity:.32; }
+              50% { transform: translateY(-8px); opacity:.5; }
+              100% { transform: translateY(0px); opacity:.32; }
             }
           `}</style>
         </div>
 
         <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`} className="block relative">
-          {/* single translate keeps graph perfectly centered */}
+          {/* Keep graph perfectly centered */}
           <g transform={`translate(${W / 2} ${H / 2}) scale(${zoom})`}>
-            {/* Links + very slow dash + midpoint arrow + tiny role chip */}
+            {/* Links + VERY slow dash + midpoint arrow */}
             {graph.links.map((l, i) => {
               const s = graph.nodes.find((n) => n.id === l.source)!;
               const t = graph.nodes.find((n) => n.id === l.target)!;
@@ -693,9 +857,6 @@ function NetworkCanvas({
                 { x: -arrowSize, y: -arrowSize * 0.6 },
               ];
 
-              // tiny role chip background
-              const chip = l.side === "supplier" ? "📦" : "👥";
-
               return (
                 <g key={i}>
                   <line
@@ -706,8 +867,8 @@ function NetworkCanvas({
                     stroke="var(--text)"
                     strokeOpacity={sel ? 0.9 : 0.45}
                     strokeWidth={sel ? l.weight + 1.2 : l.weight}
-                    strokeDasharray="8 14"
-                    style={{ animation: "flow 12s linear infinite" }}
+                    strokeDasharray="10 18"
+                    style={{ animation: "flow 22s linear infinite" }}
                   />
                   {/* center arrow */}
                   <g transform={`translate(${mx} ${my}) rotate(${ang})`}>
@@ -716,14 +877,6 @@ function NetworkCanvas({
                       fill="var(--text)"
                       opacity={sel ? 0.9 : 0.7}
                     />
-                  </g>
-                  {/* role chip (subtle) */}
-                  <g transform={`translate(${mx + 10 * Math.cos((ang * Math.PI) / 180)} ${my + 10 * Math.sin((ang * Math.PI) / 180)})`}>
-                    <foreignObject x={-8} y={-8} width="16" height="16">
-                      <div className="h-4 w-4 text-[10px] leading-[16px] text-center rounded-full bg-[var(--panel)]/80 border border-[var(--border)]">
-                        {chip}
-                      </div>
-                    </foreignObject>
                   </g>
                 </g>
               );
@@ -744,14 +897,14 @@ function NetworkCanvas({
                   onClick={() => !isCenter && setModalNode(n)}
                   style={{ cursor: isCenter ? "default" : "pointer", filter: `drop-shadow(${glow})` }}
                 >
-                  {/* subtle halo ring */}
+                  {/* halo */}
                   <circle cx={cx} cy={cy} r={r + 4} fill="transparent" stroke="white" strokeOpacity={hover === n.id ? 0.18 : 0.08} />
                   <circle cx={cx} cy={cy} r={r} fill="var(--panel)" stroke="var(--border)" strokeWidth={1} />
                   {isCenter ? (
                     <foreignObject x={cx - 16} y={cy - 16} width="32" height="32">
                       <div className="h-8 w-8 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--panel)]">
                         <img
-                          src={providers[Math.min(logoIdx, providers.length - 1)]}
+                          src={centerLogoCandidates[Math.min(logoIdx, centerLogoCandidates.length - 1)]}
                           alt={selected.ticker}
                           className="h-full w-full object-contain"
                           onError={() => setLogoIdx((i) => i + 1)}
@@ -759,9 +912,11 @@ function NetworkCanvas({
                       </div>
                     </foreignObject>
                   ) : (
-                    <text x={cx} y={cy + 3} textAnchor="middle" className="fill-[var(--text)]" style={{ fontSize: "10px", fontWeight: 700 }}>
-                      {n.label.slice(0, 2).toUpperCase()}
-                    </text>
+                    <foreignObject x={cx - 14} y={cy - 14} width="28" height="28">
+                      <div className="h-7 w-7 overflow-hidden rounded bg-[var(--panel)]/60 border border-[var(--border)] flex items-center justify-center">
+                        <NodeBadge name={n.label} size={28} regions={n.regions} />
+                      </div>
+                    </foreignObject>
                   )}
                   <text x={cx} y={cy + r + 12} textAnchor="middle" className="fill-[var(--text)]" style={{ fontSize: "10px" }}>
                     {n.label}
