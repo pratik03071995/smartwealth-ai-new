@@ -17,10 +17,9 @@ type Row = {
   notes?: string;
   is_dummy?: boolean | number | string;
 };
-
 type VendorsResp = { count: number; items: Row[]; cached_at?: string; error?: string };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ""; // leave empty if /api is proxied
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 /* ================= Utilities ================= */
 const toNum = (v: any): number | null => {
@@ -52,10 +51,7 @@ function TickerGlyph({ text }: { text: string }) {
   return (
     <div
       className="flex h-full w-full items-center justify-center text-[10px] font-bold"
-      style={{
-        background: "linear-gradient(90deg, var(--brand2), var(--brand1))",
-        color: "#0A1630",
-      }}
+      style={{ background: "linear-gradient(90deg, var(--brand2), var(--brand1))", color: "#0A1630" }}
     >
       {init}
     </div>
@@ -68,27 +64,27 @@ function normalizeRel(rel: string) {
   return rel || "other";
 }
 
-/* ================= Layout helpers (left/right) ================= */
+/* ================= Graph types ================= */
 type Node = {
   id: string;
   label: string;
   side: "center" | "supplier" | "customer";
-  rPx: number;         // visual node radius
-  strength: number;    // 0..1
-  usdM: number | null; // contract value
+  rPx: number;
+  strength: number;
+  usdM: number | null;
   regions: string[];
   tiers: string[];
   categories: string[];
   products: string[];
   notes?: string;
   isDummy?: boolean;
-  count: number;       // merged rows
+  count: number;
   x: number;
   y: number;
 };
 type Link = { source: string; target: string; weight: number; side: "supplier" | "customer" };
 
-/* ================== Simple Combobox (company picker) ================== */
+/* ================== Company Combobox (fixed selection) ================== */
 function CompanyCombobox({
   label,
   items,
@@ -123,7 +119,7 @@ function CompanyCombobox({
   }, []);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative z-[1000]"> {/* keep above canvas */}
       <label className="text-xs text-[var(--muted)]">{label}</label>
       <div className="mt-1 flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2">
         <input
@@ -133,6 +129,7 @@ function CompanyCombobox({
             if (!open) setOpen(true);
           }}
           onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 120)} // allow option mousedown to fire
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
               e.preventDefault();
@@ -147,16 +144,15 @@ function CompanyCombobox({
                 onPick(pick.label);
                 setOpen(false);
               }
-            } else if (e.key === "Escape") {
-              setOpen(false);
             }
           }}
           placeholder={placeholder}
           className="w-full bg-transparent text-sm outline-none"
         />
-        {value ? (
+        {value && (
           <button
             className="text-xs text-[var(--muted)] hover:text-white/80"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               onPick("");
               setQ("");
@@ -165,14 +161,14 @@ function CompanyCombobox({
           >
             ×
           </button>
-        ) : null}
-        <button className="ml-auto text-[var(--muted)] hover:text-white/80" onClick={() => setOpen((o) => !o)} title="Toggle">
+        )}
+        <button className="ml-auto text-[var(--muted)] hover:text-white/80" onMouseDown={(e)=>e.preventDefault()} onClick={() => setOpen((o) => !o)} title="Toggle">
           ▾
         </button>
       </div>
       {open && (
         <div
-          className="absolute z-50 mt-2 max-h-72 w-full overflow-auto rounded-xl border border-[var(--border)] bg-[var(--panel)] p-1 shadow-2xl"
+          className="absolute z-[1100] mt-2 max-h-72 w-full overflow-auto rounded-xl border border-[var(--border)] bg-[var(--panel)] p-1 shadow-2xl"
           style={{ boxShadow: "0 12px 50px rgba(0,0,0,.35)" }}
         >
           {filtered.length === 0 ? (
@@ -182,7 +178,8 @@ function CompanyCombobox({
               <div
                 key={it.key}
                 onMouseEnter={() => setHi(i)}
-                onClick={() => {
+                onMouseDown={(e) => {
+                  e.preventDefault();
                   onPick(it.label);
                   setOpen(false);
                 }}
@@ -220,7 +217,6 @@ export default function Vendors() {
   const [filterRegion, setFilterRegion] = useState<string>("all");
   const [filterTier, setFilterTier] = useState<string>("all");
 
-  // zoom for overall controls row (optional)
   const [zoom, setZoom] = useState(1);
 
   useEffect(() => {
@@ -245,7 +241,7 @@ export default function Vendors() {
     };
   }, []);
 
-  // Distinct companies
+  // Companies
   const companies = useMemo(() => {
     const m = new Map<string, { company: string; ticker: string; count: number }>();
     for (const r of rows) {
@@ -260,7 +256,6 @@ export default function Vendors() {
       .sort((a, b) => a.company.localeCompare(b.company || b.ticker));
   }, [rows]);
 
-  // Active rows for selected company
   const activeRows = useMemo(() => {
     if (!selected) return [];
     const { company, ticker } = selected;
@@ -279,7 +274,6 @@ export default function Vendors() {
     return ["all", ...Array.from(s).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))];
   }, [activeRows]);
 
-  // Filtered rows
   const filtered = useMemo(() => {
     let out = activeRows;
     if (filterRel !== "all") out = out.filter((r) => normalizeRel(r.relation_type) === filterRel);
@@ -288,9 +282,10 @@ export default function Vendors() {
     return out;
   }, [activeRows, filterRel, filterRegion, filterTier]);
 
-  // Build graph (LR columns), aggregate counterparties
+  // Build graph (centered)
   const graph = useMemo(() => {
-    if (!selected) return { nodes: [] as Node[], links: [] as Link[], counts: { suppliers: 0, customers: 0 } };
+    if (!selected)
+      return { nodes: [] as Node[], links: [] as Link[], counts: { suppliers: 0, customers: 0 }, dim: { W: 640, H: 420 } };
 
     const centerId = `center:${selected.ticker}`;
     const nodes: Node[] = [];
@@ -366,7 +361,6 @@ export default function Vendors() {
     const vmax = Math.max(1, ...aggs.map((a) => a.usdM || 0));
     const rFor = (usdM: number) => Math.max(10, Math.min(28, 10 + (usdM / vmax) * 18));
 
-    // column layout (smaller + centered)
     const W = 640,
       H = 420;
     const colX = { left: -200, center: 0, right: 200 };
@@ -401,7 +395,7 @@ export default function Vendors() {
         x: colX.left,
         y: yLeft(i),
       });
-      links.push({ source: id, target: `center:${selected.ticker}`, weight: 1 + a.strength * 4, side: "supplier" });
+      links.push({ source: id, target: centerId, weight: 1 + a.strength * 4, side: "supplier" });
     });
 
     rightAgg.forEach((a, i) => {
@@ -423,24 +417,14 @@ export default function Vendors() {
         x: colX.right,
         y: yRight(i),
       });
-      links.push({ source: `center:${selected.ticker}`, target: id, weight: 1 + a.strength * 4, side: "customer" });
+      links.push({ source: centerId, target: id, weight: 1 + a.strength * 4, side: "customer" });
     });
-
-    // shift into the (0..W, 0..H) viewbox space in <g translate>
-    for (const n of nodes) {
-      n.x += 0;
-      n.y += 0;
-    }
 
     return { nodes, links, counts: { suppliers: leftAgg.length, customers: rightAgg.length }, dim: { W, H } };
   }, [filtered, selected]);
 
   const companyItems = useMemo(
-    () =>
-      companies.map((c) => ({
-        key: `${c.company}||${c.ticker}`,
-        label: `${c.company} (${c.ticker || "?"})`,
-      })),
+    () => companies.map((c) => ({ key: `${c.company}||${c.ticker}`, label: `${c.company} (${c.ticker || "?"})` })),
     [companies]
   );
 
@@ -475,8 +459,11 @@ export default function Vendors() {
         </div>
       </div>
 
-      {/* Controls */}
-      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-12" style={{ transform: `scale(${zoom})`, transformOrigin: "top left" }}>
+      {/* Controls (isolated layer above canvas) */}
+      <div
+        className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-12 relative z-[1000]"
+        style={{ transform: `scale(${zoom})`, transformOrigin: "top left", isolation: "isolate" }}
+      >
         <div className="md:col-span-6">
           <CompanyCombobox
             label="Select company"
@@ -487,7 +474,6 @@ export default function Vendors() {
           />
         </div>
 
-        {/* Native selects for bullet-proof interaction */}
         <div className="md:col-span-2">
           <label className="text-xs text-[var(--muted)]">Relation</label>
           <select
@@ -537,16 +523,14 @@ export default function Vendors() {
         <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <div className="mb-2 text-sm text-[var(--muted)]">Loading vendor network…</div>
           <div className="relative h-3 overflow-hidden rounded-full" style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))" }}>
-            <div className="absolute inset-y-0 left-0 w-1/3 animate-[sweep_1.8s_ease-in-out_infinite] rounded-full" style={{ background: "linear-gradient(90deg, rgba(255,255,255,.8), rgba(255,255,255,.2))" }} />
+            <div className="absolute inset-y-0 left-0 w-1/3 animate-[sweep_4s_linear_infinite] rounded-full" style={{ background: "linear-gradient(90deg, rgba(255,255,255,.8), rgba(255,255,255,.2))" }} />
           </div>
-          <style>{`
-            @keyframes sweep { 0% { transform: translateX(-100%);} 100% { transform: translateX(260%);} }
-          `}</style>
+          <style>{`@keyframes sweep { 0% { transform: translateX(-100%);} 100% { transform: translateX(260%);} }`}</style>
         </div>
       )}
       {err && <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm">Error: {err}</div>}
 
-      {/* Canvas */}
+      {/* Canvas (z-0 so menus overlay properly) */}
       {selected ? (
         <NetworkCanvas selected={selected} graph={graph} />
       ) : (
@@ -599,7 +583,7 @@ export default function Vendors() {
   );
 }
 
-/* ================= Graph canvas (lighter, centered) ================= */
+/* ================= Graph canvas (centered; arrow in middle) ================= */
 function NetworkCanvas({
   selected,
   graph,
@@ -616,11 +600,9 @@ function NetworkCanvas({
   const W = graph.dim?.W ?? 640;
   const H = graph.dim?.H ?? 420;
 
-  // center logo for selected ticker
   const [logoIdx, setLogoIdx] = useState(0);
   const providers = useMemo(() => logoProviders(selected.ticker), [selected.ticker]);
 
-  // wheel zoom
   const svgRef = useRef<SVGSVGElement | null>(null);
   useEffect(() => {
     const el = svgRef.current;
@@ -637,7 +619,7 @@ function NetworkCanvas({
   const tipNode = hover ? graph.nodes.find((n) => n.id === hover) : null;
 
   return (
-    <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-3">
+    <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-3 relative z-0">
       <div className="mb-2 flex items-center justify-between">
         <div className="text-sm font-semibold">
           {selected.company} ({selected.ticker})
@@ -656,45 +638,64 @@ function NetworkCanvas({
         </div>
       </div>
 
+      {/* center the SVG area and keep it smaller */}
       <div className="relative mx-auto max-w-3xl overflow-hidden rounded-xl bg-white/3">
         <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`} className="block">
           <defs>
-            {/* Arrowheads (neutral theme) */}
-            <marker id="arrow-supplier" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-              <path d="M0,0 L9,3 L0,6 Z" fill="var(--text)" />
-            </marker>
-            <marker id="arrow-customer" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-              <path d="M0,0 L9,3 L0,6 Z" fill="var(--text)" />
-            </marker>
+            {/* neutral arrowheads (we'll use custom mid arrows instead) */}
           </defs>
 
+          {/* IMPORTANT: one translate to center the coordinate system */}
           <g transform={`translate(${W / 2} ${H / 2}) scale(${zoom})`}>
-            {/* links (calm dashed motion) */}
+            {/* links (dashed) + MIDPOINT ARROW */}
             {graph.links.map((l, i) => {
               const s = graph.nodes.find((n) => n.id === l.source)!;
               const t = graph.nodes.find((n) => n.id === l.target)!;
               const sel = hover && (hover === s.id || hover === t.id);
+
+              // line endpoints in centered coords
+              const x1 = s.x, y1 = s.y, x2 = t.x, y2 = t.y;
+
+              // midpoint + angle for arrow
+              const mx = (x1 + x2) / 2;
+              const my = (y1 + y2) / 2;
+              const ang = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
+
+              // small arrow polygon centered at (mx,my)
+              const arrowSize = 7;
+              const poly = [
+                { x: 0, y: 0 },
+                { x: -arrowSize, y: arrowSize * 0.6 },
+                { x: -arrowSize, y: -arrowSize * 0.6 },
+              ];
+
               return (
-                <line
-                  key={i}
-                  x1={s.x + W / 2}
-                  y1={s.y + H / 2}
-                  x2={t.x + W / 2}
-                  y2={t.y + H / 2}
-                  stroke="var(--text)"
-                  strokeOpacity={sel ? 0.9 : 0.55}
-                  strokeWidth={sel ? l.weight + 1.2 : l.weight}
-                  markerEnd={`url(#arrow-${l.side})`}
-                  strokeDasharray="6 8"
-                  style={{ animation: "flow 2.2s linear infinite" }}
-                />
+                <g key={i}>
+                  <line
+                    x1={x1}
+                    y1={y1}
+                    x2={x2}
+                    y2={y2}
+                    stroke="var(--text)"
+                    strokeOpacity={sel ? 0.9 : 0.55}
+                    strokeWidth={sel ? l.weight + 1.2 : l.weight}
+                    strokeDasharray="6 10"
+                    style={{ animation: "flow 4s linear infinite" }}
+                  />
+                  <g transform={`translate(${mx} ${my}) rotate(${ang})`}>
+                    <polygon
+                      points={poly.map((p) => `${p.x},${p.y}`).join(" ")}
+                      fill="var(--text)"
+                      opacity={sel ? 0.9 : 0.7}
+                    />
+                  </g>
+                </g>
               );
             })}
 
-            {/* nodes */}
+            {/* nodes (use centered coords directly) */}
             {graph.nodes.map((n) => {
-              const cx = n.x + W / 2,
-                cy = n.y + H / 2;
+              const cx = n.x, cy = n.y;
               const isCenter = n.side === "center";
               const r = isCenter ? 26 : Math.max(9, Math.min(28, n.rPx));
               return (
@@ -706,20 +707,15 @@ function NetworkCanvas({
                   style={{ cursor: isCenter ? "default" : "pointer" }}
                 >
                   <circle cx={cx} cy={cy} r={r} fill="var(--panel)" stroke="var(--border)" strokeWidth={1} />
-                  {/* center: company logo (fallback glyph) */}
                   {isCenter ? (
                     <foreignObject x={cx - 16} y={cy - 16} width="32" height="32">
                       <div className="h-8 w-8 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--panel)]">
-                        {providers.length ? (
-                          <img
-                            src={providers[Math.min(logoIdx, providers.length - 1)]}
-                            alt={selected.ticker}
-                            className="h-full w-full object-contain"
-                            onError={() => setLogoIdx((i) => i + 1)}
-                          />
-                        ) : (
-                          <TickerGlyph text={selected.ticker} />
-                        )}
+                        <img
+                          src={providers[Math.min(logoIdx, providers.length - 1)]}
+                          alt={selected.ticker}
+                          className="h-full w-full object-contain"
+                          onError={() => setLogoIdx((i) => i + 1)}
+                        />
                       </div>
                     </foreignObject>
                   ) : (
@@ -727,7 +723,6 @@ function NetworkCanvas({
                       {n.label.slice(0, 2).toUpperCase()}
                     </text>
                   )}
-                  {/* labels */}
                   <text x={cx} y={cy + r + 12} textAnchor="middle" className="fill-[var(--text)]" style={{ fontSize: "10px" }}>
                     {n.label}
                   </text>
@@ -736,12 +731,10 @@ function NetworkCanvas({
             })}
           </g>
 
-          <style>{`
-            @keyframes flow { to { stroke-dashoffset: -220; } }
-          `}</style>
+          <style>{`@keyframes flow { to { stroke-dashoffset: -260; } }`}</style>
         </svg>
 
-        {/* tooltip */}
+        {/* tooltip pinned near bottom center (simple + readable) */}
         {tipNode && (
           <div
             className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg border border-[var(--border)] bg-[var(--panel)]/95 px-2 py-1 text-[11px]"
@@ -758,6 +751,8 @@ function NetworkCanvas({
           </div>
         )}
       </div>
+
+      {modalNode && <NodeModal node={modalNode} onClose={() => setModalNode(null)} />}
     </div>
   );
 }
@@ -780,6 +775,46 @@ function Legend({ suppliers, customers }: { suppliers: number; customers: number
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-2 w-6 rounded bg-white/40" /> Arrow width = relationship strength
       </span>
+    </div>
+  );
+}
+
+/* ================= Node Modal ================= */
+function NodeModal({ node, onClose }: { node: Node; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[240] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute right-3 top-3 rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5">
+          Close
+        </button>
+        <div className="mb-3">
+          <div className="text-lg font-semibold">{node.label}</div>
+          <div className="text-xs text-[var(--muted)]">
+            {node.side === "supplier" ? "Supplier" : node.side === "customer" ? "Customer" : ""}
+            {node.count > 1 ? ` • ${node.count} links` : ""}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <Info label="Est. Contract" value={abbrevMoney(node.usdM)} />
+          <Info label="Rel. Strength" value={`${(node.strength * 100).toFixed(0)}%`} />
+          <Info label="Tier(s)" value={node.tiers.length ? node.tiers.join(", ") : "—"} />
+          <Info label="Region(s)" value={node.regions.length ? node.regions.join(", ") : "—"} />
+          <Info label="Category" value={node.categories.length ? node.categories.join(", ") : "—"} />
+          <Info label="Product/Component" value={node.products.length ? node.products.join(", ") : "—"} />
+          <div className="col-span-2">
+            <div className="mb-1 text-xs text-[var(--muted)]">Notes</div>
+            <div className="min-h-[48px] rounded-xl border border-[var(--border)] p-2 text-sm">{node.notes || "—"}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs text-[var(--muted)]">{label}</div>
+      <div className="font-medium">{value}</div>
     </div>
   );
 }
