@@ -1,57 +1,181 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* -------------------------------------------------------
+   SmartWealth AI — Global Styles (Tailwind + Theme Tokens)
+   COMPLETE REPLACEMENT
+   ------------------------------------------------------- */
+   @tailwind base;
+   @tailwind components;
+   @tailwind utilities;
+   
+   /* Base */
+   :root { color-scheme: light; }
+   html, body, #root { height: 100%; }
+   * { box-sizing: border-box; }
+   
+   /* ---------- THEME TOKENS (Warm Light – default) ---------- */
+   :root {
+     --bg: #f8f7f4;              /* warm ivory background */
+     --text: #1a1a1a;            /* deep neutral text */
+     --muted: #6b6b6b;           /* warm taupe for secondary text/axes */
+     --panel: rgba(28,28,28,0.04);  /* card panels / inputs */
+     --border: rgba(28,28,28,0.12); /* subtle border on light */
+   
+     --brand1: #7b5bfb;          /* purple gradient start */
+     --brand2: #b18cff;          /* purple gradient end */
+     --accent-green: #16a34a;    /* up */
+     --accent-red: #dc2626;      /* down */
+     --btnText: #1a1a1a;         /* text on brand button in light mode */
+   }
+   
+   /* ---------- DARK THEME OVERRIDES ---------- */
+   .dark {
+     color-scheme: dark;
+     --bg: #0b0c10;
+     --text: #ffffff;
+     --muted: #a7a3ff;
+     --panel: rgba(255,255,255,0.06);
+     --border: rgba(255,255,255,0.10);
+   
+     --brand1: #7b5bfb;
+     --brand2: #b18cff;
+     --accent-green: #22c55e;
+     --accent-red: #ef4444;
+     --btnText: #000;
+   }
+   
+   /* ---------- Utilities / Design Tokens ---------- */
+   .gradient-text {
+     background: linear-gradient(90deg, var(--brand2) 0%, var(--brand1) 100%);
+     -webkit-background-clip: text;
+     -webkit-text-fill-color: transparent;
+   }
+   
+   /* Generic glass panel helper (for cards/inputs) */
+   .glass {
+     background: var(--panel);
+     border: 1px solid var(--border);
+     backdrop-filter: blur(10px);
+   }
+   
+   /* Slightly stronger glass (used sparingly) */
+   .glass-strong { backdrop-filter: blur(16px) saturate(120%); }
+   
+   /* Slim, branded scrollbar (used in chat feed etc.) */
+   .scroll-slim::-webkit-scrollbar { width: 8px; height: 8px; }
+   .scroll-slim::-webkit-scrollbar-thumb {
+     background: linear-gradient(180deg, var(--brand2), var(--brand1));
+     border-radius: 999px;
+   }
+   .scroll-slim { scrollbar-width: thin; scrollbar-color: var(--brand2) transparent; }
+   
+   /* Smooth theme & UI transitions */
+   html {
+     transition: background-color .25s ease, color .25s ease;
+   }
+   a, button {
+     transition:
+       color .2s ease,
+       background-color .2s ease,
+       border-color .2s ease,
+       box-shadow .2s ease,
+       opacity .2s ease,
+       transform .2s ease;
+   }
+   
+   /* ---------- Header “Pro Tabs” (underline style) ---------- */
+   /* Accessible focus ring for keyboard navigation on tabs */
+   a[role="tab"] { position: relative; }
+   a[role="tab"]::after {
+     content: '';
+     position: absolute; inset: 0; border-radius: 12px;
+     outline: 0; box-shadow: none;
+   }
+   a[role="tab"]:focus-visible::after {
+     box-shadow: 0 0 0 2px rgba(123,91,251,0.40);
+   }
+   
+   /* No pill/glass styles here on purpose:
+      The current design uses a clean label with a gradient underline.
+      The underline element is created in App.tsx via <motion.span layoutId="pro-underline"> */
+   
+   /* ---------- Optional helpers for charts/modals ---------- */
+   /* Ensure any modal overlay fully covers and prevents bleed-through */
+   .modal-overlay { background: rgba(0,0,0,0.80); backdrop-filter: blur(2px); }
+   
+   /* Give chart containers a definite height if needed */
+   .chart-host { height: 380px; width: 100%; }
+   
+   /* ---------- End of file ---------- */
+   
+   /* ===== Powered by AI badge animations ===== */
+.ai-badge { position: relative; overflow: hidden; }
 
-:root { color-scheme: light; }
-html, body, #root { height: 100%; }
-* { box-sizing: border-box; }
-
-/* ---------- THEME TOKENS (Warm Light default) ---------- */
-:root {
-  --bg: #f8f7f4;             /* warm ivory background */
-  --text: #1a1a1a;           /* softer deep gray text */
-  --muted: #6b6b6b;          /* warm muted taupe */
-  --panel: rgba(28,28,28,0.04);
-  --border: rgba(28,28,28,0.12);
-
-  --brand1: #7b5bfb;          /* purple gradient start */
-  --brand2: #b18cff;          /* purple gradient end */
-  --accent-green: #16a34a;    /* up */
-  --accent-red: #dc2626;      /* down */
-  --btnText: #1a1a1a;         /* dark text on light buttons */
+.ai-text {
+  background: linear-gradient(90deg, var(--brand2), var(--brand1));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
-/* Dark overrides stay the same */
-.dark {
-  color-scheme: dark;
-  --bg: #0b0c10;
-  --text: #ffffff;
-  --muted: #a7a3ff;
-  --panel: rgba(255,255,255,0.06);
-  --border: rgba(255,255,255,0.10);
+@keyframes aiPulse {
+  0%, 100% { transform: translateY(0) scale(1); filter: saturate(1); }
+  50% { transform: translateY(-1px) scale(1.04); filter: saturate(1.12); }
+}
+.ai-pulse { animation: aiPulse 1.8s ease-in-out infinite; }
 
-  --brand1: #7b5bfb;
-  --brand2: #b18cff;
-  --accent-green: #22c55e;
-  --accent-red: #ef4444;
-  --btnText: #000;
+@keyframes aiSheen {
+  0% { transform: translateX(-120%); opacity: .0; }
+  10% { opacity: .55; }
+  50% { opacity: .35; }
+  100% { transform: translateX(120%); opacity: .0; }
+}
+.ai-sheen {
+  background: linear-gradient(
+    110deg,
+    transparent 0%,
+    rgba(177,140,255,0.35) 25%,
+    rgba(123,91,251,0.45) 45%,
+    transparent 70%
+  );
+  filter: blur(8px);
+  animation: aiSheen 2.8s linear infinite;
+  pointer-events: none;
+  mix-blend-mode: normal;
+  opacity: .5;
+}
+/* ===== Brand "AI" animation (heroic but tasteful) ===== */
+.brand-ai {
+  position: relative;
+  display: inline-block;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  /* animated gradient text */
+  background: linear-gradient(90deg, var(--brand2), var(--brand1), var(--brand2));
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: aiGradient 4s ease-in-out infinite, aiPulse 2.2s ease-in-out infinite;
+  /* soft inner glow for contrast on both themes */
+  text-shadow:
+    0 0 12px rgba(123,91,251,0.30),
+    0 1px 0 rgba(0,0,0,0.06);
 }
 
-/* Utilities */
-.gradient-text {
-  background: linear-gradient(90deg, var(--brand2) 0%, var(--brand1) 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+@keyframes aiGradient {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes aiPulse {
+  0%, 100% { transform: translateY(0) scale(1); filter: saturate(1); }
+  50%      { transform: translateY(-1px) scale(1.04); filter: saturate(1.12); }
 }
 
-.glass {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  backdrop-filter: blur(10px);
+/* nicer focus ring on the header tabs for keyboard users */
+a[role="tab"] { position: relative; }
+a[role="tab"]::after {
+  content: '';
+  position: absolute; inset: 0; border-radius: 12px;
+  outline: 0; box-shadow: none;
 }
-
-.scroll-slim::-webkit-scrollbar { width: 8px; }
-.scroll-slim::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, var(--brand2), var(--brand1));
-  border-radius: 999px;
+a[role="tab"]:focus-visible::after {
+  box-shadow: 0 0 0 2px rgba(123,91,251,0.40);
 }
-.scroll-slim { scrollbar-width: thin; scrollbar-color: var(--brand2) transparent; }

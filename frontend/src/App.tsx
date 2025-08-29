@@ -1,96 +1,74 @@
-import React, { useState, useEffect } from 'react'
-import { Outlet, Link, useLocation } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import React, { useEffect } from 'react'
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
+import { motion } from 'framer-motion'
 
-function useTheme() {
+function useThemeBoot() {
   const getInitial = () => {
     const saved = localStorage.getItem('theme')
-    if (saved === 'light' || saved === 'dark') return saved
+    if (saved === 'light' || saved === 'dark') return saved as 'light' | 'dark'
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   }
-  const [theme, setTheme] = useState<'light' | 'dark'>(getInitial)
+  const [theme] = React.useState<'light' | 'dark'>(getInitial)
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
-    localStorage.setItem('theme', theme)
   }, [theme])
-  return { theme, setTheme }
 }
 
-export default function App() {
-  const [open, setOpen] = useState(false)
-  const location = useLocation()
-  const { theme, setTheme } = useTheme()
+const NAV: Array<{ to: string; label: string }> = [
+  { to: '/',          label: 'Chat'     },
+  { to: '/earnings',  label: 'Earnings' },
+  { to: '/score',     label: 'Scoring'  },
+  { to: '/vendors',   label: 'Vendors'  },
+  { to: '/sectors',   label: 'Sectors'  },
+]
 
-  // ⌘K / Ctrl+K to toggle sidebar
+export default function App() {
+  useThemeBoot()
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  // 1–5 keyboard hotkeys
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const isMac = navigator.platform.toUpperCase().includes('MAC')
-      if ((isMac && e.metaKey && e.key.toLowerCase() === 'k') || (!isMac && e.ctrlKey && e.key.toLowerCase() === 'k')) {
-        e.preventDefault(); setOpen(v => !v)
-      }
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      const idx = Number(e.key) - 1
+      if (idx >= 0 && idx < NAV.length) { e.preventDefault(); navigate(NAV[idx].to) }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [navigate])
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] relative overflow-x-clip">
-      {/* Header */}
-      <header className="sticky top-0 z-40 border-b border-[var(--border)] bg-[color:var(--bg)]/70 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <Link to="/" className="text-lg md:text-xl font-semibold tracking-wide">
-            <span className="gradient-text font-black">SmartWealth</span> <span className="opacity-70">AI</span>
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
+      {/* HEADER */}
+      <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-[color:var(--bg)]/80 backdrop-blur">
+        {/* 3-col grid ensures nav is centered */}
+        <div className="mx-auto grid max-w-6xl grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4">
+          {/* Brand (as it was before) */}
+          <Link
+            to="/"
+            className="justify-self-start font-semibold tracking-wide text-xl md:text-2xl"
+            aria-label="SmartWealth AI Home"
+          >
+            <span className="gradient-text font-black">SmartWealth</span>{" "}
+            <span className="opacity-70">AI</span>
           </Link>
 
+          {/* Navigation tabs */}
+          <ProTabs activePath={location.pathname} />
+
+          {/* Right spacer to keep tabs centered */}
+          <div aria-hidden />
         </div>
       </header>
 
-      {/* Floating neon FAB */}
-      <motion.button
-        onClick={() => setOpen(v => !v)}
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        whileHover={{ scale: 1.06 }}
-        whileTap={{ scale: 0.98 }}
-        className="fixed right-6 top-20 z-50 h-12 w-12 rounded-full border border-[var(--border)] bg-[var(--panel)] backdrop-blur shadow-glow"
-        title="Toggle menu (⌘K)"
-      >
-        <motion.span animate={{ rotate: open ? 180 : 0 }} className="block text-center text-xl leading-[48px] select-none">
-          {open ? '✖' : '≡'}
-        </motion.span>
-      </motion.button>
-
-      {/* Sidebar */}
-      <AnimatePresence>
-        {open && (
-          <motion.aside
-            initial={{ x: -320, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: -320, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 26 }}
-            className="fixed left-0 top-0 z-50 h-full w-72 border-r border-[var(--border)] bg-[color:var(--bg)]/95 backdrop-blur px-5 py-6"
-          >
-            <div className="mb-6 text-sm uppercase tracking-widest text-[var(--muted)]">Navigation</div>
-            <nav className="space-y-2">
-              {[['/', 'Chat'], ['/earnings', 'Earnings'], ['/score', 'Scoring'], ['/vendors', 'Vendors'], ['/sectors', 'Sectors']].map(([to, label]) => (
-                <Link key={to} to={to} onClick={() => setOpen(false)}
-                  className={`block rounded-xl px-4 py-3 hover:bg-[var(--panel)] ${location.pathname === to ? 'bg-[var(--panel)] ring-1 ring-[var(--border)]' : ''}`}>
-                  {label}
-                </Link>
-              ))}
-            </nav>
-            <div className="mt-6 text-xs text-[var(--muted)]">© {new Date().getFullYear()} SmartWealth AI</div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
-
-      {/* Main content */}
-      <main className="relative z-10 mx-auto max-w-6xl px-6 py-10 md:py-12">
+      {/* MAIN */}
+      <main className="mx-auto max-w-6xl px-6 py-10 md:py-12">
         <Outlet />
       </main>
 
-      {/* Footer */}
-      <footer className="relative z-10 mt-4 border-t border-[var(--border)] bg-gradient-to-b from-transparent to-[color:var(--bg)]">
+      {/* FOOTER (unchanged, includes theme toggle) */}
+      <footer className="border-t border-[var(--border)] bg-gradient-to-b from-transparent to-[color:var(--bg)]">
         <div className="mx-auto max-w-6xl px-6 py-8 grid gap-6 md:grid-cols-3 text-sm">
           <div>
             <div className="text-base font-semibold">SmartWealth AI</div>
@@ -104,25 +82,82 @@ export default function App() {
               <li><Link className="hover:underline" to="/sectors">Sectors</Link></li>
             </ul>
           </div>
-          <div className="flex flex-col items-center md:items-end gap-3">
-          <div className="text-[var(--muted)]">Shortcuts</div>
-          <ul className="space-y-1 text-sm">
-            <li>⌘K / Ctrl+K – Toggle menu</li>
-          </ul>
-          {/* Theme Toggle in footer */}
-          <button
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            className="mt-2 rounded-xl px-3 py-2 text-sm border border-[var(--border)] bg-[var(--panel)] hover:opacity-90"
-          >
-            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
-          </button>
-        </div>
-
+          <FooterThemeToggle />
         </div>
         <div className="border-t border-[var(--border)] py-4 text-center text-xs text-[var(--muted)]">
           © {new Date().getFullYear()} SmartWealth AI. All rights reserved.
         </div>
       </footer>
+    </div>
+  )
+}
+
+/* ----------------- Components ----------------- */
+
+function ProTabs({ activePath }: { activePath: string }) {
+  const idx = Math.max(0, NAV.findIndex(n => n.to === activePath))
+  return (
+    <nav role="tablist" aria-label="Primary" className="relative flex items-center justify-self-center">
+      <div className="relative flex rounded-2xl border border-[var(--border)] px-2 py-1 bg-[color:var(--bg)]/60">
+        {NAV.map((item, i) => {
+          const selected = i === idx
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              role="tab"
+              aria-selected={selected}
+              className={`
+                relative rounded-xl px-3 md:px-4 py-2 text-[15px] font-semibold
+                ${selected ? 'text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}
+                transition-transform hover:-translate-y-[1px] focus:outline-none
+              `}
+            >
+              {selected && (
+                <motion.span
+                  layoutId="pro-underline"
+                  className="absolute left-2 right-2 -bottom-[6px] h-[3px] rounded-full"
+                  style={{
+                    background: 'linear-gradient(90deg, var(--brand2), var(--brand1))',
+                    boxShadow: '0 0 16px rgba(123,91,251,0.35)',
+                  }}
+                  transition={{ type: 'spring', stiffness: 520, damping: 40 }}
+                />
+              )}
+              {item.label}
+            </Link>
+          )
+        })}
+      </div>
+    </nav>
+  )
+}
+
+function FooterThemeToggle() {
+  const [theme, setTheme] = React.useState<'light' | 'dark'>(
+    document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+  )
+  useEffect(() => {
+    const obs = new MutationObserver(() => {
+      setTheme(document.documentElement.classList.contains('dark') ? 'dark' : 'light')
+    })
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => obs.disconnect()
+  }, [])
+  return (
+    <div className="flex flex-col items-center md:items-end gap-3">
+      <div className="text-[var(--muted)]">Controls</div>
+      <button
+        onClick={() => {
+          const next = theme === 'dark' ? 'light' : 'dark'
+          document.documentElement.classList.toggle('dark', next === 'dark')
+          localStorage.setItem('theme', next)
+          setTheme(next)
+        }}
+        className="mt-2 rounded-xl px-3 py-2 text-sm border border-[var(--border)] bg-[var(--panel)] hover:opacity-90"
+      >
+        {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+      </button>
     </div>
   )
 }
