@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 
 function useThemeBoot() {
@@ -14,25 +15,38 @@ function useThemeBoot() {
   }, [theme])
 }
 
-const NAV: Array<{ to: string; label: string }> = [
+const NAV_TOP: Array<{ to: string; label: string }> = [
   { to: '/',          label: 'Chat'     },
-  { to: '/earnings',  label: 'Earnings' },
-  { to: '/score',     label: 'Scoring'  },
-  { to: '/vendors',   label: 'Vendors'  },
+  { to: '/calendar',  label: 'Calendar' },
   { to: '/sectors',   label: 'Sectors'  },
 ]
+
+const NAV_DROPDOWNS: Record<string, Array<{ label: string; href?: string; disabled?: boolean }>> = {
+  Calendar: [
+    { label: 'Earnings Calendar', href: '/earnings' },
+    { label: 'IPO Calendar', disabled: true },
+    { label: 'Dividend Calendar', disabled: true },
+  ],
+  Sectors: [
+    { label: 'Scoring', href: '/score' },
+    { label: 'Vendors', href: '/vendors' },
+    { label: 'Company Info', disabled: true },
+  ],
+}
 
 export default function App() {
   useThemeBoot()
   const location = useLocation()
   const navigate = useNavigate()
 
-  // 1–5 keyboard hotkeys
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const idx = Number(e.key) - 1
-      if (idx >= 0 && idx < NAV.length) { e.preventDefault(); navigate(NAV[idx].to) }
+      if (idx >= 0 && idx < NAV_TOP.length) {
+        e.preventDefault()
+        navigate(NAV_TOP[idx].label === 'Calendar' ? '/earnings' : NAV_TOP[idx].to)
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -40,92 +54,224 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
-      {/* HEADER */}
+      {/* Keep your header exactly as-is (blur stays) */}
       <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-[color:var(--bg)]/80 backdrop-blur">
-        {/* 3-col grid ensures nav is centered */}
         <div className="mx-auto grid max-w-6xl grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4">
-          {/* Brand (as it was before) */}
-          <Link
-            to="/"
-            className="justify-self-start font-semibold tracking-wide text-xl md:text-2xl"
-            aria-label="SmartWealth AI Home"
-          >
-            <span className="gradient-text font-black">SmartWealth</span>{" "}
-            <span className="opacity-70">AI</span>
+          {/* Brand: SmartWealth gradient + AI white */}
+          <Link to="/" className="flex items-center gap-2 font-bold tracking-tight select-none">
+            <span
+              className="text-xl bg-clip-text text-transparent"
+              style={{ backgroundImage: 'linear-gradient(90deg, var(--brand2), var(--brand1))' }}
+            >
+              SmartWealth
+            </span>
+            <span className="text-xl text-white">AI</span>
           </Link>
 
-          {/* Navigation tabs */}
           <ProTabs activePath={location.pathname} />
-
-          {/* Right spacer to keep tabs centered */}
           <div aria-hidden />
         </div>
       </header>
 
-      {/* MAIN */}
       <main className="mx-auto max-w-6xl px-6 py-10 md:py-12">
         <Outlet />
       </main>
 
-      {/* FOOTER (unchanged, includes theme toggle) */}
       <footer className="border-t border-[var(--border)] bg-gradient-to-b from-transparent to-[color:var(--bg)]">
-        <div className="mx-auto max-w-6xl px-6 py-8 grid gap-6 md:grid-cols-3 text-sm">
-          <div>
-            <div className="text-base font-semibold">SmartWealth AI</div>
-            <p className="mt-2 text-[var(--muted)]">Actionable insights, elegant UI, and instant answers.</p>
+        <div className="mx-auto max-w-6xl px-6 py-8 grid gap-6 md:grid-cols-3">
+          <div className="opacity-80">
+            <div className="font-semibold mb-1">SmartWealth AI</div>
+            <div className="text-sm">Build. Learn. Invest smarter.</div>
           </div>
-          <div>
-            <div className="text-[var(--muted)]">Product</div>
-            <ul className="mt-2 space-y-1">
-              <li><Link className="hover:underline" to="/earnings">Earnings</Link></li>
-              <li><Link className="hover:underline" to="/score">Scoring</Link></li>
-              <li><Link className="hover:underline" to="/sectors">Sectors</Link></li>
-            </ul>
-          </div>
+          <div className="opacity-80 text-sm">Built with ❤️ using Vite, React, Tailwind.</div>
           <FooterThemeToggle />
-        </div>
-        <div className="border-t border-[var(--border)] py-4 text-center text-xs text-[var(--muted)]">
-          © {new Date().getFullYear()} SmartWealth AI. All rights reserved.
         </div>
       </footer>
     </div>
   )
 }
 
-/* ----------------- Components ----------------- */
+type Rect = { left: number; top: number; width: number; height: number }
+
+function DropdownPortal({
+  anchorRect,
+  children,
+  onClose,
+}: {
+  anchorRect: Rect | null
+  children: React.ReactNode
+  onClose: () => void
+}) {
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      // close if click outside the panel
+      const el = document.getElementById('nav-portal-panel')
+      if (el && !el.contains(e.target as Node)) onClose()
+    }
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onEsc)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onEsc)
+    }
+  }, [onClose])
+
+  if (!anchorRect) return null
+
+  const top = Math.round(anchorRect.top + anchorRect.height + 8) // 8px gap below trigger
+  const left = Math.round(anchorRect.left)
+
+  return createPortal(
+    <div
+      id="nav-portal-panel"
+      className="fixed z-[200] w-56 rounded-xl border border-[var(--border)] shadow-2xl"
+      style={{
+        top,
+        left,
+        background: '#0A1630', // SOLID, OPAQUE (no transparency, no blur)
+      }}
+    >
+      {children}
+    </div>,
+    document.body
+  )
+}
 
 function ProTabs({ activePath }: { activePath: string }) {
-  const idx = Math.max(0, NAV.findIndex(n => n.to === activePath))
+  const [open, setOpen] = React.useState<string | null>(null)
+  const [anchorRect, setAnchorRect] = React.useState<Rect | null>(null)
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const triggerRefs = React.useRef<Record<string, HTMLButtonElement | null>>({})
+
+  useEffect(() => {
+    function onResize() {
+      if (open && triggerRefs.current[open]) {
+        const r = triggerRefs.current[open]!.getBoundingClientRect()
+        setAnchorRect({ left: r.left, top: r.top, width: r.width, height: r.height })
+      }
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [open])
+
+  const idx = Math.max(
+    0,
+    NAV_TOP.findIndex(
+      n => n.to === activePath || (n.label === 'Calendar' && activePath.startsWith('/earnings'))
+    )
+  )
+
   return (
-    <nav role="tablist" aria-label="Primary" className="relative flex items-center justify-self-center">
+    <nav role="tablist" aria-label="Primary" className="relative flex items-center justify-self-center" ref={containerRef}>
       <div className="relative flex rounded-2xl border border-[var(--border)] px-2 py-1 bg-[color:var(--bg)]/60">
-        {NAV.map((item, i) => {
+        {NAV_TOP.map((item, i) => {
           const selected = i === idx
+          const submenu = NAV_DROPDOWNS[item.label as keyof typeof NAV_DROPDOWNS]
+
+          if (!submenu) {
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                role="tab"
+                aria-selected={selected}
+                className={`
+                  relative rounded-xl px-3 md:px-4 py-2 text-[15px] font-semibold
+                  ${selected ? 'text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}
+                  transition-transform hover:-translate-y-[1px] focus:outline-none
+                `}
+              >
+                {selected && (
+                  <motion.span
+                    layoutId="pro-underline"
+                    className="absolute left-2 right-2 -bottom-[6px] h-[3px] rounded-full"
+                    style={{
+                      background: 'linear-gradient(90deg, var(--brand2), var(--brand1))',
+                      boxShadow: '0 0 16px rgba(123,91,251,0.35)',
+                    }}
+                  />
+                )}
+                {item.label}
+              </Link>
+            )
+          }
+
           return (
-            <Link
-              key={item.to}
-              to={item.to}
-              role="tab"
-              aria-selected={selected}
-              className={`
-                relative rounded-xl px-3 md:px-4 py-2 text-[15px] font-semibold
-                ${selected ? 'text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}
-                transition-transform hover:-translate-y-[1px] focus:outline-none
-              `}
-            >
-              {selected && (
-                <motion.span
-                  layoutId="pro-underline"
-                  className="absolute left-2 right-2 -bottom-[6px] h-[3px] rounded-full"
-                  style={{
-                    background: 'linear-gradient(90deg, var(--brand2), var(--brand1))',
-                    boxShadow: '0 0 16px rgba(123,91,251,0.35)',
-                  }}
-                  transition={{ type: 'spring', stiffness: 520, damping: 40 }}
-                />
+            <div key={item.label} className="relative">
+              <button
+                type="button"
+                ref={(el) => (triggerRefs.current[item.label] = el)}
+                onClick={() => {
+                  if (open === item.label) {
+                    setOpen(null)
+                    setAnchorRect(null)
+                  } else {
+                    const r = triggerRefs.current[item.label]!.getBoundingClientRect()
+                    setAnchorRect({ left: r.left, top: r.top, width: r.width, height: r.height })
+                    setOpen(item.label)
+                  }
+                }}
+                onMouseEnter={() => {
+                  const r = triggerRefs.current[item.label]?.getBoundingClientRect()
+                  if (r) setAnchorRect({ left: r.left, top: r.top, width: r.width, height: r.height })
+                  setOpen(item.label)
+                }}
+                className={`
+                  relative rounded-xl px-3 md:px-4 py-2 text-[15px] font-semibold
+                  ${selected ? 'text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}
+                  transition-transform hover:-translate-y-[1px] focus:outline-none
+                `}
+                aria-haspopup="menu"
+                aria-expanded={open === item.label}
+              >
+                {selected && (
+                  <motion.span
+                    layoutId="pro-underline"
+                    className="absolute left-2 right-2 -bottom-[6px] h-[3px] rounded-full"
+                    style={{
+                      background: 'linear-gradient(90deg, var(--brand2), var(--brand1))',
+                      boxShadow: '0 0 16px rgba(123,91,251,0.35)',
+                    }}
+                  />
+                )}
+                {item.label}
+                <span className="ml-1 inline-block">
+                  <svg width="14" height="14" viewBox="0 0 24 24">
+                    <path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="2" />
+                  </svg>
+                </span>
+              </button>
+
+              {/* Render dropdown OUTSIDE the blurred header */}
+              {open === item.label && (
+                <DropdownPortal anchorRect={anchorRect} onClose={() => { setOpen(null); setAnchorRect(null) }}>
+                  <div className="p-2">
+                    {NAV_DROPDOWNS[item.label].map((sub) =>
+                      sub.disabled ? (
+                        <span
+                          key={sub.label}
+                          className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm text-[var(--muted)] opacity-70 select-none cursor-not-allowed"
+                        >
+                          {sub.label} <span className="text-xs">(soon)</span>
+                        </span>
+                      ) : (
+                        <Link
+                          key={sub.label}
+                          to={sub.href!}
+                          className="block rounded-lg px-3 py-2 text-sm hover:bg-white/10"
+                          onClick={() => { setOpen(null); setAnchorRect(null) }}
+                        >
+                          {sub.label}
+                        </Link>
+                      )
+                    )}
+                  </div>
+                </DropdownPortal>
               )}
-              {item.label}
-            </Link>
+            </div>
           )
         })}
       </div>

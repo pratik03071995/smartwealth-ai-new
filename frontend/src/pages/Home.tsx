@@ -8,13 +8,65 @@ export default function Home() {
         <h1 className="mb-3 text-[28px] font-extrabold leading-tight md:text-[40px]">
           Create <span className="gradient-text">Wealth</span> With Just a Prompt
         </h1>
-        <p className="mb-6 text-sm md:text-base text-[var(--muted)]">
-          Type a prompt, get insights instantly. Earnings, scores, sectors — powered by AI.
+
+        {/* Updated subtitle with futuristic Powered by AI badge */}
+        <p className="mb-6 text-sm md:text-base text-[var(--muted)] whitespace-nowrap flex items-center justify-center gap-2">
+          <span>Type a prompt, get insights instantly. Earnings, scores, sectors — </span>
+          <PoweredByAIBadge />
         </p>
       </div>
       <Terminal />
       <Chat />
     </div>
+  )
+}
+
+/* === Futuristic Powered by AI badge === */
+function PoweredByAIBadge() {
+  return (
+    <span
+      className="relative inline-flex items-center rounded-full px-3 py-1 text-[13px] md:text-[14px] leading-none select-none"
+      style={{
+        background: '#0A1630',
+        border: '1px solid rgba(255,255,255,0.12)',
+        boxShadow:
+          'inset 0 0 0 1px rgba(255,255,255,0.04), 0 6px 30px rgba(123,91,251,0.18)',
+      }}
+      title="Powered by AI"
+    >
+      <span className="mr-1 opacity-80">powered by</span>
+      <span
+        className="font-semibold tracking-wide bg-clip-text text-transparent"
+        style={{
+          backgroundImage: 'linear-gradient(90deg, var(--brand2), var(--brand1))',
+          textShadow: '0 0 14px rgba(123,91,251,0.25)',
+        }}
+      >
+        AI
+      </span>
+
+      {/* Animated sheen covering full badge */}
+      <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-full">
+        <span className="absolute -left-full top-0 h-full w-full sheen" />
+      </span>
+
+      <style>{`
+        .sheen {
+          background: linear-gradient(
+            120deg,
+            transparent,
+            rgba(255,255,255,0.35),
+            transparent
+          );
+          animation: sweep 2.8s linear infinite;
+        }
+        @keyframes sweep {
+          0%   { transform: translateX(-100%); }
+          60%  { transform: translateX(100%); }
+          100% { transform: translateX(100%); }
+        }
+      `}</style>
+    </span>
   )
 }
 
