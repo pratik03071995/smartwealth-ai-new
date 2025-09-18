@@ -8,6 +8,7 @@ import Earnings from './pages/Earnings'
 import Score from './pages/Score'
 import Vendors from './pages/Vendors'
 import Sectors from './pages/Sectors'
+import CompanyInfo from './pages/CompanyInfo'
 
 const router = createBrowserRouter([
   { path: '/', element: <App />, children: [
@@ -15,6 +16,7 @@ const router = createBrowserRouter([
     { path: 'earnings', element: <Earnings /> },
     { path: 'score', element: <Score /> },
     { path: 'vendors', element: <Vendors /> },
+    { path: 'company-info', element: <CompanyInfo /> },
     { path: 'sectors', element: <Sectors /> },
   ]}
 ])

@@ -30,7 +30,7 @@ const NAV_DROPDOWNS: Record<string, Array<{ label: string; href?: string; disabl
   Sectors: [
     { label: 'Scoring', href: '/score' },
     { label: 'Vendors', href: '/vendors' },
-    { label: 'Company Info', disabled: true },
+    { label: 'Company Info', href: '/company-info' },
   ],
 }
 

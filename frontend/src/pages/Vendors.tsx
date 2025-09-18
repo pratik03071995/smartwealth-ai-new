@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { buildApiUrl } from "../services/api";
+import { CompanyLogo } from "../utils/logos";
 
 /* =========== Types =========== */
 type Row = {
@@ -22,97 +24,21 @@ type Row = {
 };
 type VendorsResp = { count: number; items: Row[]; cached_at?: string; error?: string };
 
-/* =========== Utils =========== */
-const toNum = (v: any): number | null => {
-  if (v == null || v === "") return null;
-  const n = typeof v === "string" ? parseFloat(v.replace(/[^\d.\-]/g, "")) : Number(v);
-  return Number.isNaN(n) ? null : n;
+type Aggregate = {
+  name: string;
+  side: "supplier" | "customer";
+  usdM: number;
+  strength: number;
+  regions: string[];
+  tiers: string[];
+  categories: string[];
+  products: string[];
+  notes: string[];
+  isDummy: boolean;
+  rows: Row[];
+  inferredTicker?: string | null;
 };
-const abbrevMoney = (n: number | null): string => {
-  if (n === null) return "—";
-  const a = Math.abs(n);
-  if (a >= 1e12) return (n / 1e12).toFixed(2) + "T";
-  if (a >= 1e9) return (n / 1e9).toFixed(2) + "B";
-  if (a >= 1e6) return (n / 1e6).toFixed(2) + "M";
-  if (a >= 1e3) return (n / 1e3).toFixed(2) + "K";
-  return n.toFixed(0);
-};
-const title = (s?: string) => (s || "").trim();
-const uniq = (arr: (string | number | undefined | null)[]) =>
-  Array.from(new Set(arr.map((x) => (x == null ? "" : String(x).trim())).filter(Boolean)));
 
-function normalizeRel(rel: string) {
-  const t = (rel || "").toLowerCase();
-  if (t.includes("supplier")) return "supplier";
-  if (t.includes("customer")) return "customer";
-  return rel || "other";
-}
-
-/* =========== Logos =========== */
-function logoProvidersFromTicker(symbol: string) {
-  const sym = (symbol || "").toUpperCase().trim();
-  const a = `https://img.logo.dev/ticker/${encodeURIComponent(sym)}?size=128`;
-  const b = `https://storage.googleapis.com/iex/api/logos/${encodeURIComponent(sym)}.png`;
-  return [a, b];
-}
-function TickerGlyph({ text }: { text: string }) {
-  const init = (text || "?").slice(0, 3).toUpperCase();
-  return (
-    <div className="flex h-full w-full items-center justify-center text-[10px] font-bold"
-         style={{ background: "linear-gradient(90deg, var(--brand2), var(--brand1))", color: "#0A1630" }}>
-      {init}
-    </div>
-  );
-}
-type LogoCache = Record<string, string | null>;
-const LS_KEY = "vendorLogoCache_v1";
-const memLogo = new Map<string, string | null>();
-function readLsCache(): LogoCache { try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch { return {}; } }
-function writeLsCache(c: LogoCache) { try { localStorage.setItem(LS_KEY, JSON.stringify(c)); } catch {} }
-function extractTickerFromName(name: string): string | null {
-  const m = name.match(/\(([A-Z][A-Z0-9.\-]{1,12})\)/);
-  return m ? m[1] : null;
-}
-function probeImage(url: string): Promise<boolean> {
-  return new Promise((res) => { const img = new Image(); img.onload = () => res(true); img.onerror = () => res(false); img.src = url; });
-}
-function useLogo(name: string, tickerHint?: string) {
-  const key = (tickerHint?.toUpperCase() || name.toLowerCase().trim());
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!key) { setUrl(null); return; }
-      if (memLogo.has(key)) { setUrl(memLogo.get(key)!); return; }
-      const ls = readLsCache(); if (ls[key] !== undefined) { memLogo.set(key, ls[key]); setUrl(ls[key]); return; }
-      const cands: string[] = [];
-      const ticker = (tickerHint || "").toUpperCase().trim() || extractTickerFromName(name) || "";
-      if (ticker) cands.push(...logoProvidersFromTicker(ticker));
-      try {
-        const resp = await fetch(`https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(name)}`, { mode: "cors" });
-        if (resp.ok) { const js = await resp.json(); if (js?.[0]?.logo) cands.unshift(js[0].logo as string); }
-      } catch {}
-      for (const u of cands) { if (await probeImage(u)) { if (!cancelled) { memLogo.set(key, u); writeLsCache({ ...ls, [key]: u }); setUrl(u); } return; } }
-      if (!cancelled) { memLogo.set(key, null); writeLsCache({ ...ls, [key]: null }); setUrl(null); }
-    })();
-    return () => { cancelled = true; };
-  }, [key, name, tickerHint]);
-  return url;
-}
-function Globe({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" className="opacity-80">
-      <circle cx="12" cy="12" r="10" fill="none" stroke="var(--text)" strokeWidth="1.5" />
-      <path d="M3 12h18M12 2c3.5 4 3.5 16 0 20M12 2c-3.5 4-3.5 16 0 20" fill="none" stroke="var(--text)" strokeWidth="1.2" />
-    </svg>
-  );
-}
-const looksGlobal = (regions?: string[] | string) => {
-  const s = Array.isArray(regions) ? regions.join(" ").toLowerCase() : String(regions || "").toLowerCase();
-  return /global|worldwide|intl|international/.test(s);
-}
-
-/* =========== Graph Types =========== */
 type Node = {
   id: string;
   label: string;
@@ -131,15 +57,56 @@ type Node = {
   y: number;
   inferredTicker?: string | null;
 };
-type Link = { source: string; target: string; weight: number; side: "supplier" | "customer"; iconType?: string };
 
-/* =========== Edge Icon =========== */
+type Link = {
+  source: string;
+  target: string;
+  weight: number;
+  side: "supplier" | "customer";
+  iconType?: string;
+  length?: number;
+};
+
+/* =========== Helpers =========== */
+const toNum = (v: any): number | null => {
+  if (v == null || v === "") return null;
+  const n = typeof v === "string" ? parseFloat(v.replace(/[^\d.\-]/g, "")) : Number(v);
+  return Number.isNaN(n) ? null : n;
+};
+
+const abbrevMoney = (n: number | null): string => {
+  if (n === null) return "—";
+  const a = Math.abs(n);
+  if (a >= 1e12) return (n / 1e12).toFixed(2) + "T";
+  if (a >= 1e9) return (n / 1e9).toFixed(2) + "B";
+  if (a >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (a >= 1e3) return (n / 1e3).toFixed(2) + "K";
+  return n.toFixed(0);
+};
+
+const title = (s?: string) => (s || "").trim();
+
+const uniq = (arr: (string | number | undefined | null)[]) =>
+  Array.from(new Set(arr.map((x) => (x == null ? "" : String(x).trim())).filter(Boolean)));
+
+const normalizeRel = (rel: string) => {
+  const t = (rel || "").toLowerCase();
+  if (t.includes("supplier")) return "supplier";
+  if (t.includes("customer")) return "customer";
+  return rel || "other";
+};
+
+function extractTickerFromName(name: string): string | null {
+  const m = name.match(/\(([A-Z][A-Z0-9.\-]{1,12})\)/);
+  return m ? m[1] : null;
+}
+
 function detectIconType(name: string, products: string[], categories: string[], ticker?: string | null): string {
   const s = `${name} ${products.join(" ")} ${categories.join(" ")}`.toLowerCase();
   const t = (ticker || "").toUpperCase();
-  if (["TSM","NVDA","AMD","INTC","ASML","MU","QCOM","AVGO"].includes(t)) return "chip";
-  if (["TSLA","F","GM","TM","HMC","RIVN","LCID"].includes(t)) return "car";
-  if (["MSFT","GOOG","GOOGL","AMZN","ORCL","CRM","NOW","SNOW"].includes(t)) return "cloud";
+  if (["TSM", "NVDA", "AMD", "INTC", "ASML", "MU", "QCOM", "AVGO"].includes(t)) return "chip";
+  if (["TSLA", "F", "GM", "TM", "HMC", "RIVN", "LCID"].includes(t)) return "car";
+  if (["MSFT", "GOOG", "GOOGL", "AMZN", "ORCL", "CRM", "NOW", "SNOW"].includes(t)) return "cloud";
   if (/chip|semi|gpu|asic|foundry|wafer|silicon/.test(s)) return "chip";
   if (/auto|vehicle|car|ev/.test(s)) return "car";
   if (/cloud|saas|compute|storage|api|azure|aws|gcp/.test(s)) return "cloud";
@@ -149,90 +116,130 @@ function detectIconType(name: string, products: string[], categories: string[], 
   if (/bank|payments|fintech|visa|mastercard/.test(s)) return "bank";
   return "package";
 }
-function EdgeIcon({ type }: { type?: string }) {
-  const sz = 14;
-  switch (type) {
-    case "chip": return (<svg width={sz} height={sz} viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="none" stroke="var(--text)" strokeWidth="1.5"/><rect x="10" y="10" width="4" height="4" fill="var(--text)"/></svg>);
-    case "car": return (<svg width={sz} height={sz} viewBox="0 0 24 24"><path d="M3 13l2-5h14l2 5v5H3v-5Z" fill="none" stroke="var(--text)" strokeWidth="1.5"/><circle cx="7.5" cy="18" r="1.5" fill="var(--text)"/><circle cx="16.5" cy="18" r="1.5" fill="var(--text)"/></svg>);
-    case "cloud": return (<svg width={sz} height={sz} viewBox="0 0 24 24"><path d="M6 18h10a4 4 0 0 0 0-8 6 6 0 0 0-11-1 4 4 0 0 0 1 9Z" fill="none" stroke="var(--text)" strokeWidth="1.5"/></svg>);
-    case "battery": return (<svg width={sz} height={sz} viewBox="0 0 24 24"><rect x="3" y="8" width="16" height="8" rx="2" fill="none" stroke="var(--text)" strokeWidth="1.5"/><rect x="5" y="10" width="8" height="4" fill="var(--text)"/><rect x="19" y="10" width="2" height="4" fill="var(--text)"/></svg>);
-    case "display": return (<svg width={sz} height={sz} viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2" fill="none" stroke="var(--text)" strokeWidth="1.5"/><rect x="10" y="17" width="4" height="2" fill="var(--text)"/></svg>);
-    case "sensor": return (<svg width={sz} height={sz} viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="var(--text)"/><circle cx="12" cy="12" r="7" fill="none" stroke="var(--text)" strokeWidth="1.5" opacity="0.7"/></svg>);
-    case "bank": return (<svg width={sz} height={sz} viewBox="0 0 24 24"><path d="M4 10h16L12 5 4 10Z" fill="none" stroke="var(--text)" strokeWidth="1.5"/><path d="M5 10v7h14v-7" fill="none" stroke="var(--text)" strokeWidth="1.5"/></svg>);
-    default: return (<svg width={sz} height={sz} viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2" fill="none" stroke="var(--text)" strokeWidth="1.5"/><rect x="6" y="9" width="6" height="6" fill="var(--text)"/></svg>);
-  }
-}
 
 /* =========== Combobox =========== */
 function CompanyCombobox({ label, items, value, onPick, placeholder }: {
-  label: string; items: { key: string; label: string }[]; value: string; onPick: (label: string) => void; placeholder?: string;
+  label: string;
+  items: { key: string; label: string }[];
+  value: string;
+  onPick: (label: string) => void;
+  placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState(value);
   const [hi, setHi] = useState(0);
   const ref = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => setQ(value), [value]);
+
   const filtered = useMemo(() => {
     const s = (q || "").toLowerCase();
     return items.filter((it) => it.label.toLowerCase().includes(s)).slice(0, 200);
   }, [items, q]);
+
   useEffect(() => {
-    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as any)) setOpen(false); };
-    document.addEventListener("mousedown", onDoc); return () => document.removeEventListener("mousedown", onDoc);
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as any)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
   }, []);
+
   return (
-    <div ref={ref} className="relative z-[1100]">
+    <div ref={ref} className="relative">
       <label className="text-xs text-[var(--muted)]">{label}</label>
-      <div className="mt-1 flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2">
+      <div className="mt-1 flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 shadow-[0_10px_32px_rgba(8,12,35,0.35)]">
         <input
           value={open ? q : value}
-          onChange={(e) => { setQ(e.target.value); if (!open) setOpen(true); }}
+          onChange={(e) => {
+            setQ(e.target.value);
+            if (!open) setOpen(true);
+          }}
           onFocus={() => setOpen(true)}
-          onBlur={() => setTimeout(() => setOpen(false), 120)}
           onKeyDown={(e) => {
-            if (e.key === "ArrowDown") { e.preventDefault(); setHi((i) => Math.min(i + 1, Math.max(0, filtered.length - 1))); }
-            else if (e.key === "ArrowUp") { e.preventDefault(); setHi((i) => Math.max(i - 1, 0)); }
-            else if (e.key === "Enter") { e.preventDefault(); const pick = filtered[hi] || filtered[0]; if (pick) { onPick(pick.label); setOpen(false); } }
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setHi((i) => Math.min(i + 1, Math.max(0, filtered.length - 1)));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setHi((i) => Math.max(i - 1, 0));
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              const pick = filtered[hi] || filtered[0];
+              if (pick) {
+                onPick(pick.label);
+                setOpen(false);
+              }
+            }
           }}
           placeholder={placeholder}
           className="w-full bg-transparent text-sm outline-none"
         />
         {value && (
-          <button className="text-xs text-[var(--muted)] hover:text-white/80"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => onPick("")}
-                  title="Clear">×</button>
+          <button
+          className="text-xs text-[var(--muted)] hover:text-[var(--text)]"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onPick("")}
+            title="Clear"
+          >
+            ×
+          </button>
         )}
-        <button className="ml-auto text-[var(--muted)] hover:text-white/80"
-                onMouseDown={(e)=>e.preventDefault()}
-                onClick={() => setOpen((o) => !o)} title="Toggle">▾</button>
+        <button
+          className="ml-auto text-[var(--muted)] hover:text-[var(--text)]"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setOpen((o) => !o)}
+          title="Toggle"
+        >
+          ▾
+        </button>
       </div>
       {open && (
-        <div className="absolute z-[1200] mt-2 max-h-72 w-full overflow-auto rounded-xl border border-[var(--border)] bg-[var(--panel)] p-1 shadow-2xl"
-             style={{ boxShadow: "0 12px 50px rgba(0,0,0,.35)" }}>
+        <div className="absolute z-[1200] mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[var(--border)]/70 bg-[#080f25]/95 p-1 shadow-[0_28px_60px_rgba(8,12,35,0.6)] backdrop-blur">
           {filtered.length === 0 ? (
             <div className="px-3 py-2 text-xs text-[var(--muted)]">No matches</div>
-          ) : filtered.map((it, i) => (
-            <div key={it.key} onMouseEnter={() => setHi(i)}
-                 onMouseDown={(e) => { e.preventDefault(); onPick(it.label); setOpen(false); }}
-                 className={`flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm ${hi === i ? "bg-white/10" : "hover:bg-white/5"}`}>
-              <span className="truncate">{it.label}</span>
-            </div>
-          ))}
+          ) : (
+            filtered.map((it, i) => (
+              <div
+                key={it.key}
+                onMouseEnter={() => setHi(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onPick(it.label);
+                  setOpen(false);
+                }}
+                className={`flex cursor-pointer items-center rounded-xl px-3 py-2 text-sm transition ${
+                  hi === i ? "bg-white/10" : "hover:bg-white/5"
+                }`}
+              >
+                <span className="truncate">{it.label}</span>
+              </div>
+            ))
+          )}
         </div>
       )}
     </div>
   );
 }
 
-/* =========== Node badge (logo) =========== */
-function NodeBadge({ name, size, regions, tickerHint }: { name: string; size: number; regions?: string[]; tickerHint?: string | null }) {
-  const url = useLogo(name, tickerHint || undefined);
-  const isGlobal = looksGlobal(regions || []);
-  if (url) return <img src={url} alt={name} className="h-full w-full object-contain" />;
-  if (isGlobal) return <div className="flex h-full w-full items-center justify-center"><Globe size={Math.max(12, Math.min(22, size - 6))} /></div>;
-  return <TickerGlyph text={name} />;
-}
+const SIDE_STYLES = {
+  supplier: {
+    gradient: "from-[#76fcb9]/30 to-[#3cc4ff]/12",
+    border: "border-[#76fcb9]/35",
+    badge: "text-[#76fcb9]",
+    badgeColor: "#76fcb9",
+    chip: "bg-[#76fcb9]/18 border-[#76fcb9]/25 text-[#b9ffe8]",
+  },
+  customer: {
+    gradient: "from-[#ff9add]/25 to-[#7f5bff]/12",
+    border: "border-[#b28bff]/35",
+    badge: "text-[#d5b3ff]",
+    badgeColor: "#d5b3ff",
+    chip: "bg-[#7f5bff]/18 border-[#7f5bff]/28 text-[#e9ddff]",
+  },
+} as const;
+
+type Accent = typeof SIDE_STYLES[keyof typeof SIDE_STYLES];
 
 /* =========== Page =========== */
 export default function Vendors() {
@@ -242,19 +249,22 @@ export default function Vendors() {
 
   const [companyQuery, setCompanyQuery] = useState("");
   const [selected, setSelected] = useState<{ company: string; ticker: string } | null>(() => {
-    try { return JSON.parse(localStorage.getItem("vendor:selected") || "null"); } catch { return null; }
+    try {
+      return JSON.parse(localStorage.getItem("vendor:selected") || "null");
+    } catch {
+      return null;
+    }
   });
 
   const [filterRel, setFilterRel] = useState<"all" | "supplier" | "customer">("all");
   const [filterRegion, setFilterRegion] = useState<string>("all");
   const [filterTier, setFilterTier] = useState<string>("all");
 
-  const [zoom, setZoom] = useState(1);
-
   useEffect(() => {
     let cancel = false;
     (async () => {
-      setLoading(true); setErr(null);
+      setLoading(true);
+      setErr(null);
       try {
         const res = await fetch(buildApiUrl("vendors/network"));
         const j: VendorsResp = await res.json();
@@ -266,340 +276,743 @@ export default function Vendors() {
         if (!cancel) setLoading(false);
       }
     })();
-    return () => { cancel = true; };
+    return () => {
+      cancel = true;
+    };
   }, []);
 
   const companies = useMemo(() => {
     const m = new Map<string, { company: string; ticker: string; count: number }>();
     for (const r of rows) {
-      const c = title(r.company); const t = (r.ticker || "").toUpperCase(); const key = `${c}||${t}`;
-      if (!m.has(key)) m.set(key, { company: c, ticker: t, count: 0 }); m.get(key)!.count += 1;
+      const c = title(r.company);
+      const t = (r.ticker || "").toUpperCase();
+      const key = `${c}||${t}`;
+      if (!m.has(key)) m.set(key, { company: c, ticker: t, count: 0 });
+      m.get(key)!.count += 1;
     }
-    return Array.from(m.values()).filter(x => x.company || x.ticker).sort((a,b)=>a.company.localeCompare(b.company || b.ticker));
+    return Array.from(m.values())
+      .filter((x) => x.company || x.ticker)
+      .sort((a, b) => a.company.localeCompare(b.company || b.ticker));
   }, [rows]);
 
   const activeRows = useMemo(() => {
     if (!selected) return [];
     const { company, ticker } = selected;
-    return rows.filter(r => title(r.company) === company && (r.ticker || "").toUpperCase() === ticker);
+    return rows.filter(
+      (r) => title(r.company) === company && (r.ticker || "").toUpperCase() === ticker
+    );
   }, [rows, selected]);
 
   const regionChoices = useMemo(() => {
-    const s = new Set<string>(); for (const r of activeRows) if (r.region) s.add(String(r.region));
+    const s = new Set<string>();
+    for (const r of activeRows) if (r.region) s.add(String(r.region));
     return ["all", ...Array.from(s).sort()];
   }, [activeRows]);
+
   const tierChoices = useMemo(() => {
-    const s = new Set<string>(); for (const r of activeRows) if (r.tier != null && r.tier !== "") s.add(String(r.tier));
-    return ["all", ...Array.from(s).sort((a,b)=>String(a).localeCompare(String(b), undefined, {numeric:true}))];
+    const s = new Set<string>();
+    for (const r of activeRows) if (r.tier != null && r.tier !== "") s.add(String(r.tier));
+    return ["all", ...Array.from(s).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }))];
   }, [activeRows]);
 
   const filtered = useMemo(() => {
     let out = activeRows;
-    if (filterRel !== "all") out = out.filter(r => normalizeRel(r.relation_type) === filterRel);
-    if (filterRegion !== "all") out = out.filter(r => String(r.region) === filterRegion);
-    if (filterTier !== "all") out = out.filter(r => String(r.tier) === filterTier);
+    if (filterRel !== "all") out = out.filter((r) => normalizeRel(r.relation_type) === filterRel);
+    if (filterRegion !== "all") out = out.filter((r) => String(r.region) === filterRegion);
+    if (filterTier !== "all") out = out.filter((r) => String(r.tier) === filterTier);
     return out;
   }, [activeRows, filterRel, filterRegion, filterTier]);
 
-  // Build graph
   const graph = useMemo(() => {
-    if (!selected) return { nodes: [] as Node[], links: [] as Link[], counts: { suppliers: 0, customers: 0 }, dim: { W: 640, H: 420 } };
+    if (!selected)
+      return {
+        nodes: [] as Node[],
+        links: [] as Link[],
+        counts: { suppliers: 0, customers: 0 },
+        dim: { W: 640, H: 420 },
+        aggregates: { suppliers: [] as Aggregate[], customers: [] as Aggregate[] },
+      };
+
     const centerId = `center:${selected.ticker}`;
     const nodes: Node[] = [];
     const links: Link[] = [];
-    nodes.push({ id: centerId, label: selected.company || selected.ticker, side: "center", rPx: 34, strength: 1, usdM: null, regions: [], tiers: [], categories: [], products: [], count: 0, x: 0, y: 0, inferredTicker: selected.ticker });
 
-    const suppliers = filtered.filter(r => normalizeRel(r.relation_type) === "supplier");
-    const customers = filtered.filter(r => normalizeRel(r.relation_type) === "customer");
+    const w = 640;
+    const h = 420;
 
-    type Agg = { name: string; side: "supplier"|"customer"; usdM: number; strength: number; regions: string[]; tiers: string[]; categories: string[]; products: string[]; notes: string[]; isDummy: boolean; rows: Row[]; inferredTicker?: string | null; };
-    const aggMap = new Map<string, Agg>();
-    const addAgg = (r: Row, side: "supplier"|"customer") => {
+    const suppliers = filtered.filter((r) => normalizeRel(r.relation_type) === "supplier");
+    const customers = filtered.filter((r) => normalizeRel(r.relation_type) === "customer");
+
+    const aggMap = new Map<string, Aggregate>();
+    const addAgg = (r: Row, side: "supplier" | "customer") => {
       const key = `${side}::${(r.counterparty_name || "").toLowerCase().trim()}`;
       const usd = toNum(r.est_contract_value_usd_m) || 0;
-      const sRaw = toNum(r.relationship_strength); const s = sRaw == null ? 0.5 : sRaw > 1 ? Math.max(0, Math.min(1, sRaw/100)) : Math.max(0, Math.min(1, sRaw));
-      const inferredTicker = (r.counterparty_ticker || r.cp_ticker || extractTickerFromName(r.counterparty_name || "")) || null;
-      const a = aggMap.get(key) || { name: r.counterparty_name || "Unknown", side, usdM: 0, strength: 0, regions: [], tiers: [], categories: [], products: [], notes: [], isDummy: !!r.is_dummy, rows: [], inferredTicker };
-      a.usdM += usd; a.strength = Math.max(a.strength, s);
-      a.regions = uniq([...a.regions, r.region]); a.tiers = uniq([...a.tiers, r.tier]);
-      a.categories = uniq([...a.categories, r.category]); a.products = uniq([...a.products, r.component_or_product]);
-      if (r.notes) a.notes.push(String(r.notes)); a.isDummy = a.isDummy || !!r.is_dummy; a.rows.push(r);
-      if (!a.inferredTicker && inferredTicker) a.inferredTicker = inferredTicker; aggMap.set(key, a);
+      const sRaw = toNum(r.relationship_strength);
+      const s =
+        sRaw == null
+          ? 0.5
+          : sRaw > 1
+          ? Math.max(0, Math.min(1, sRaw / 100))
+          : Math.max(0, Math.min(1, sRaw));
+      const inferredTicker =
+        (r.counterparty_ticker || r.cp_ticker || extractTickerFromName(r.counterparty_name || "")) || null;
+      const a =
+        aggMap.get(key) ||
+        ({
+          name: r.counterparty_name || "Unknown",
+          side,
+          usdM: 0,
+          strength: 0,
+          regions: [],
+          tiers: [],
+          categories: [],
+          products: [],
+          notes: [],
+          isDummy: !!r.is_dummy,
+          rows: [],
+          inferredTicker,
+        } as Aggregate);
+      a.usdM += usd;
+      a.strength = Math.max(a.strength, s);
+      a.regions = uniq([...a.regions, r.region]);
+      a.tiers = uniq([...a.tiers, r.tier]);
+      a.categories = uniq([...a.categories, r.category]);
+      a.products = uniq([...a.products, r.component_or_product]);
+      if (r.notes) a.notes.push(String(r.notes));
+      a.isDummy = a.isDummy || !!r.is_dummy;
+      a.rows.push(r);
+      if (!a.inferredTicker && inferredTicker) a.inferredTicker = inferredTicker;
+      aggMap.set(key, a);
     };
-    suppliers.forEach(r => addAgg(r, "supplier"));
-    customers.forEach(r => addAgg(r, "customer"));
+    suppliers.forEach((r) => addAgg(r, "supplier"));
+    customers.forEach((r) => addAgg(r, "customer"));
 
     const aggs = Array.from(aggMap.values());
-    const vmax = Math.max(1, ...aggs.map(a => a.usdM || 0));
+    const vmax = Math.max(1, ...aggs.map((a) => a.usdM || 0));
     const rFor = (usdM: number) => Math.max(10, Math.min(28, 10 + (usdM / vmax) * 18));
 
-    const W = 640, H = 420;
-    const colX = { left: -200, center: 0, right: 200 };
-    const ySpread = (n: number) => { const gap = 340 / Math.max(1, n); const top = -((n - 1) * gap) / 2; return (i: number) => top + i * gap; };
+    const colX = { left: -220, center: 0, right: 220 };
+    const ySpread = (n: number) => {
+      const gap = 340 / Math.max(1, n);
+      const top = -((n - 1) * gap) / 2;
+      return (i: number) => top + i * gap;
+    };
 
-    const leftAgg = aggs.filter(a => a.side === "supplier");
-    const rightAgg = aggs.filter(a => a.side === "customer");
-
+    const leftAgg = aggs.filter((a) => a.side === "supplier");
+    const rightAgg = aggs.filter((a) => a.side === "customer");
     const yLeft = ySpread(leftAgg.length);
     const yRight = ySpread(rightAgg.length);
 
-    leftAgg.forEach((a,i) => {
-      const id = `supplier:${a.name}:${i}`;
-      nodes.push({ id, label: a.name, side: "supplier", rPx: rFor(a.usdM), strength: a.strength, usdM: a.usdM || null, regions: a.regions, tiers: a.tiers, categories: a.categories, products: a.products, notes: uniq(a.notes).join(" • "), isDummy: a.isDummy, count: a.rows.length, x: colX.left, y: yLeft(i), inferredTicker: a.inferredTicker || null });
-      const iconType = detectIconType(a.name, a.products, a.categories, a.inferredTicker || undefined);
-      links.push({ source: id, target: centerId, weight: 1 + a.strength * 4, side: "supplier", iconType });
-    });
-    rightAgg.forEach((a,i) => {
-      const id = `customer:${a.name}:${i}`;
-      nodes.push({ id, label: a.name, side: "customer", rPx: rFor(a.usdM), strength: a.strength, usdM: a.usdM || null, regions: a.regions, tiers: a.tiers, categories: a.categories, products: a.products, notes: uniq(a.notes).join(" • "), isDummy: a.isDummy, count: a.rows.length, x: colX.right, y: yRight(i), inferredTicker: a.inferredTicker || null });
-      const iconType = detectIconType(a.name, a.products, a.categories, a.inferredTicker || undefined);
-      links.push({ source: centerId, target: id, weight: 1 + a.strength * 4, side: "customer", iconType });
+    nodes.push({
+      id: centerId,
+      label: selected.company,
+      side: "center",
+      rPx: 30,
+      strength: 1,
+      usdM: null,
+      regions: [],
+      tiers: [],
+      categories: [],
+      products: [],
+      notes: "",
+      isDummy: false,
+      count: filtered.length,
+      x: colX.center,
+      y: 0,
+      inferredTicker: selected.ticker,
     });
 
-    return { nodes, links, counts: { suppliers: leftAgg.length, customers: rightAgg.length }, dim: { W, H } };
+    leftAgg.forEach((a, i) => {
+      const id = `supplier:${a.name}:${i}`;
+      nodes.push({
+        id,
+        label: a.name,
+        side: "supplier",
+        rPx: rFor(a.usdM),
+        strength: a.strength,
+        usdM: a.usdM || null,
+        regions: a.regions,
+        tiers: a.tiers,
+        categories: a.categories,
+        products: a.products,
+        notes: uniq(a.notes).join(" • "),
+        isDummy: a.isDummy,
+        count: a.rows.length,
+        x: colX.left,
+        y: yLeft(i),
+        inferredTicker: a.inferredTicker || null,
+      });
+      links.push({
+        source: id,
+        target: centerId,
+        weight: 1 + a.strength * 4,
+        side: "supplier",
+        iconType: detectIconType(a.name, a.products, a.categories, a.inferredTicker),
+      });
+    });
+
+    rightAgg.forEach((a, i) => {
+      const id = `customer:${a.name}:${i}`;
+      nodes.push({
+        id,
+        label: a.name,
+        side: "customer",
+        rPx: rFor(a.usdM),
+        strength: a.strength,
+        usdM: a.usdM || null,
+        regions: a.regions,
+        tiers: a.tiers,
+        categories: a.categories,
+        products: a.products,
+        notes: uniq(a.notes).join(" • "),
+        isDummy: a.isDummy,
+        count: a.rows.length,
+        x: colX.right,
+        y: yRight(i),
+        inferredTicker: a.inferredTicker || null,
+      });
+      links.push({
+        source: centerId,
+        target: id,
+        weight: 1 + a.strength * 4,
+        side: "customer",
+        iconType: detectIconType(a.name, a.products, a.categories, a.inferredTicker),
+      });
+    });
+
+    return {
+      nodes,
+      links,
+      counts: { suppliers: leftAgg.length, customers: rightAgg.length },
+      dim: { W: w, H: h },
+      aggregates: { suppliers: leftAgg, customers: rightAgg },
+    };
   }, [filtered, selected]);
 
-  const companyItems = useMemo(() => companies.map(c => ({ key: `${c.company}||${c.ticker}`, label: `${c.company} (${c.ticker || "?"})` })), [companies]);
+  const supplierAggregates = graph.aggregates.suppliers;
+  const customerAggregates = graph.aggregates.customers;
+
+  const companyItems = useMemo(
+    () => companies.map((c) => ({ key: `${c.company}||${c.ticker}`, label: `${c.company} (${c.ticker || "?"})` })),
+    [companies]
+  );
+
   const handleCompanyPick = (label: string) => {
-    const m = label.match(/^(.*)\s+\(([A-Z0-9.\-]+)\)\s*$/); setCompanyQuery(label); if (!m) return;
-    const s = { company: m[1].trim(), ticker: m[2].trim().toUpperCase() }; setSelected(s); localStorage.setItem("vendor:selected", JSON.stringify(s)); setZoom(1);
+    const m = label.match(/^(.*)\s+\(([A-Z0-9.\-]+)\)\s*$/);
+    setCompanyQuery(label);
+    if (!m) {
+      setSelected(null);
+      localStorage.removeItem("vendor:selected");
+      return;
+    }
+    const s = { company: m[1].trim(), ticker: m[2].trim().toUpperCase() };
+    setSelected(s);
+    localStorage.setItem("vendor:selected", JSON.stringify(s));
   };
 
+  const summary = useMemo(() => {
+    if (!selected) return null;
+    const all = [...supplierAggregates, ...customerAggregates];
+    if (!all.length)
+      return {
+        suppliers: supplierAggregates.length,
+        customers: customerAggregates.length,
+        totalContract: 0,
+        uniqueRegions: 0,
+        tiers: 0,
+        connections: filtered.length,
+      };
+    const contract = all.reduce((acc, item) => acc + (item.usdM || 0), 0);
+    const regions = new Set<string>();
+    const tiers = new Set<string>();
+    all.forEach((item) => {
+      item.regions.forEach((r) => r && regions.add(String(r)));
+      item.tiers.forEach((t) => t && tiers.add(String(t)));
+    });
+    return {
+      suppliers: supplierAggregates.length,
+      customers: customerAggregates.length,
+      totalContract: contract,
+      uniqueRegions: regions.size,
+      tiers: tiers.size,
+      connections: filtered.length,
+    };
+  }, [selected, supplierAggregates, customerAggregates, filtered.length]);
+
   return (
-    <section className="mx-auto max-w-6xl px-6 py-6 md:py-8">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl md:text-3xl font-extrabold">Vendor Network</h1>
-        <div className="flex items-center gap-2">
-          <button className="rounded-xl border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-white/5" onClick={()=>setZoom(z=>Math.max(0.9,z-0.1))}>−</button>
-          <span className="w-10 text-center text-sm">{Math.round(zoom*100)}%</span>
-          <button className="rounded-xl border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-white/5" onClick={()=>setZoom(z=>Math.min(1.3,z+0.1))}>+</button>
-          <button className="rounded-xl border border-[var(--border)] px-3 py-1.5 text-sm hover:bg-white/5" onClick={()=>setZoom(1)}>Reset</button>
-        </div>
+    <section className="mx-auto max-w-6xl px-4 sm:px-6 py-6 md:py-10 space-y-6">
+      <header className="space-y-2">
+        <h1 className="text-3xl md:text-4xl font-extrabold">Vendor Network Intelligence</h1>
+        <p className="text-sm text-[var(--muted)]">
+          Explore supplier and customer relationships with live metrics pulled from the SmartWealth Databricks warehouse.
+        </p>
+        {rows.length > 0 && (
+          <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/60 px-3 py-1 text-xs text-[var(--muted)]">
+            <span className="h-2 w-2 rounded-full bg-[var(--brand2)]" />
+            {rows.length.toLocaleString()} relationships · {companies.length.toLocaleString()} companies
+          </div>
+        )}
+      </header>
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+        <aside className="space-y-5">
+          <div className="rounded-3xl border border-[var(--border)]/60 bg-[var(--panel)]/70 p-5 shadow-[0_24px_60px_rgba(8,12,35,0.45)]">
+            <CompanyCombobox
+              label="Select company"
+              items={companyItems}
+              value={companyQuery}
+              onPick={handleCompanyPick}
+              placeholder="Type to search… e.g., NVIDIA (NVDA)"
+            />
+            <p className="mt-3 text-xs text-[var(--muted)]">
+              Choose a hub company to load its ecosystem of suppliers and downstream customers.
+            </p>
+          </div>
+
+          <div className="rounded-3xl border border-[var(--border)]/60 bg-[var(--panel)]/65 p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Filters</h2>
+              <button
+                type="button"
+                className="text-xs text-[var(--muted)] hover:text-[var(--text)]"
+                onClick={() => {
+                  setFilterRel("all");
+                  setFilterRegion("all");
+                  setFilterTier("all");
+                }}
+              >
+                Reset
+              </button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-[11px] uppercase tracking-wide text-[var(--muted)]">Relation</label>
+                <select
+                  value={filterRel}
+                  onChange={(e) => setFilterRel(e.target.value as any)}
+                  className="mt-1 w-full rounded-2xl border border-[var(--border)] bg-[var(--panel)]/80 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/60 focus:ring-2 focus:ring-[var(--brand2)]/30"
+                >
+                  <option value="all">All</option>
+                  <option value="supplier">Suppliers</option>
+                  <option value="customer">Customers</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] uppercase tracking-wide text-[var(--muted)]">Region</label>
+                <select
+                  value={filterRegion}
+                  onChange={(e) => setFilterRegion(e.target.value)}
+                  className="mt-1 w-full rounded-2xl border border-[var(--border)] bg-[var(--panel)]/80 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/60 focus:ring-2 focus:ring-[var(--brand2)]/30"
+                >
+                  {regionChoices.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] uppercase tracking-wide text-[var(--muted)]">Tier</label>
+                <select
+                  value={filterTier}
+                  onChange={(e) => setFilterTier(e.target.value)}
+                  className="mt-1 w-full rounded-2xl border border-[var(--border)] bg-[var(--panel)]/80 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/60 focus:ring-2 focus:ring-[var(--brand2)]/30"
+                >
+                  {tierChoices.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {selected && summary && <SummaryPanel summary={summary} selected={selected} />}
+        </aside>
+
+        <main className="space-y-6">
+          <div className="rounded-3xl border border-[var(--border)]/50 bg-[radial-gradient(circle_at_top,_rgba(124,140,255,0.18),rgba(10,22,48,0.35))] p-4 sm:p-6 shadow-[0_28px_60px_rgba(10,16,48,0.45)]">
+            {selected ? (
+              <NetworkCanvas selected={selected} graph={graph} />
+            ) : (
+              <div className="grid h-64 place-items-center text-sm text-[var(--muted)]">
+                Select a company to visualise its supplier & customer graph.
+              </div>
+            )}
+          </div>
+
+          <Legend suppliers={graph.counts.suppliers} customers={graph.counts.customers} />
+
+          {selected && !err && (
+            <VendorColumns suppliers={supplierAggregates} customers={customerAggregates} />
+          )}
+        </main>
       </div>
 
-      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-12 relative z-[1000]" style={{ transform:`scale(${zoom})`, transformOrigin:"top left", isolation:"isolate" }}>
-        <div className="md:col-span-6">
-          <CompanyCombobox label="Select company" items={companyItems} value={companyQuery} onPick={handleCompanyPick} placeholder="Type to search… e.g., NVIDIA (NVDA)"/>
-        </div>
-        <div className="md:col-span-2">
-          <label className="text-xs text-[var(--muted)]">Relation</label>
-          <select value={filterRel} onChange={(e)=>setFilterRel(e.target.value as any)} className="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm">
-            <option value="all">All</option><option value="supplier">Suppliers</option><option value="customer">Customers</option>
-          </select>
-        </div>
-        <div className="md:col-span-2">
-          <label className="text-xs text-[var(--muted)]">Region</label>
-          <select value={filterRegion} onChange={(e)=>setFilterRegion(e.target.value)} className="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm">
-            {regionChoices.map(r => <option key={r} value={r}>{r}</option>)}
-          </select>
-        </div>
-        <div className="md:col-span-2">
-          <label className="text-xs text-[var(--muted)]">Tier</label>
-          <select value={filterTier} onChange={(e)=>setFilterTier(e.target.value)} className="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm">
-            {tierChoices.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-      </div>
-
-      {loading && (
-        <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4">
-          <div className="mb-2 text-sm text-[var(--muted)]">Loading vendor network…</div>
-          <div className="relative h-3 overflow-hidden rounded-full" style={{ background:"linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))" }}>
-            <div className="absolute inset-y-0 left-0 w-1/3 animate-[sweep_12s_linear_infinite] rounded-full" style={{ background:"linear-gradient(90deg, rgba(255,255,255,.8), rgba(255,255,255,.15))" }} />
-          </div>
-          <style>{`@keyframes sweep { 0%{transform:translateX(-100%)} 100%{transform:translateX(260%)} }`}</style>
-        </div>
-      )}
-      {err && <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm">Error: {err}</div>}
-
-      {selected ? <NetworkCanvas selected={selected} graph={graph}/> : <div className="text-sm text-[var(--muted)]">Pick a company to view its supplier & customer network.</div>}
-
-      <Legend suppliers={graph.counts?.suppliers || 0} customers={graph.counts?.customers || 0} />
-
-      {selected && (
-        <div className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4">
-          <div className="mb-2 text-sm font-semibold">Underlying rows ({filtered.length})</div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="text-[var(--muted)]">
-                <tr className="border-b border-[var(--border)] text-left">
-                  <th className="py-2 pr-3">Relation</th><th className="py-2 pr-3">Counterparty</th><th className="py-2 pr-3">Tier</th>
-                  <th className="py-2 pr-3">Category</th><th className="py-2 pr-3">Product/Component</th><th className="py-2 pr-3">Region</th>
-                  <th className="py-2 pr-3">Strength</th><th className="py-2 pr-3">Est. $ (M)</th><th className="py-2 pr-3">Start</th><th className="py-2 pr-3">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeRows
-                  .filter(r => (filterRel === "all" ? true : normalizeRel(r.relation_type) === filterRel))
-                  .map((r,i) => (
-                  <tr key={i} className="border-b border-[var(--border)]/50 hover:bg-white/5">
-                    <td className="py-2 pr-3">{normalizeRel(r.relation_type)}</td>
-                    <td className="py-2 pr-3">{r.counterparty_name}</td>
-                    <td className="py-2 pr-3">{String(r.tier ?? "")}</td>
-                    <td className="py-2 pr-3">{r.category || ""}</td>
-                    <td className="py-2 pr-3">{r.component_or_product || ""}</td>
-                    <td className="py-2 pr-3">{r.region || ""}</td>
-                    <td className="py-2 pr-3">{toNum(r.relationship_strength)?.toFixed(2) ?? "—"}</td>
-                    <td className="py-2 pr-3">{toNum(r.est_contract_value_usd_m)?.toFixed(2) ?? "—"}</td>
-                    <td className="py-2 pr-3">{r.start_year || ""}</td>
-                    <td className="py-2 pr-3">{r.notes || ""}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      {err && (
+        <div className="rounded-3xl border border-red-500/30 bg-red-500/15 p-5 text-sm text-red-200">{err}</div>
       )}
     </section>
   );
 }
 
-/* =========== Canvas (with “always-visible backbone” links) =========== */
-function NetworkCanvas({ selected, graph }: {
-  selected: { company: string; ticker: string };
-  graph: { nodes: Node[]; links: Link[]; dim?: { W: number; H: number } };
+function SummaryPanel({ summary, selected }: { summary: SummaryMetrics; selected: { company: string; ticker: string } }) {
+  return (
+    <div className="rounded-3xl border border-[var(--border)]/60 bg-[var(--panel)]/70 p-5 shadow-[0_24px_60px_rgba(8,12,35,0.45)]">
+      <div className="flex items-start gap-4">
+        <div className="h-14 w-14 overflow-hidden rounded-2xl border border-[var(--border)]/60 bg-[var(--panel)]/80">
+          <CompanyLogo symbol={selected.ticker} name={selected.company} className="h-full w-full" />
+        </div>
+        <div className="space-y-1">
+          <div className="text-[11px] uppercase tracking-wide text-[var(--muted)]">Overview</div>
+          <div className="text-lg font-semibold text-[var(--text)]">{selected.company}</div>
+          <div className="text-xs text-[var(--muted)]">{selected.ticker}</div>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <SummaryCard
+          label="Suppliers"
+          value={summary.suppliers}
+          caption="Unique upstream partners"
+          accent="from-[#76fcb9] to-[#3cc4ff]"
+        />
+        <SummaryCard
+          label="Customers"
+          value={summary.customers}
+          caption="Downstream counterparties"
+          accent="from-[#ff9add] to-[#7f5bff]"
+        />
+        <SummaryCard
+          label="Est. contract"
+          value={summary.totalContract ? `$${abbrevMoney(summary.totalContract)}+` : "Not disclosed"}
+          caption="Aggregate USD (M)"
+          accent="from-[#fdf06f] to-[#fc924c]"
+        />
+        <SummaryCard
+          label="Footprint"
+          value={`${summary.uniqueRegions} regions`}
+          caption={`${summary.tiers} tiers • ${summary.connections} rows`}
+          accent="from-[#7cf0ff] to-[#3bb0ff]"
+        />
+      </div>
+    </div>
+  );
+}
+
+type SummaryMetrics = {
+  suppliers: number;
+  customers: number;
+  totalContract: number;
+  uniqueRegions: number;
+  tiers: number;
+  connections: number;
+};
+
+function SummaryCard({ label, value, caption, accent }: { label: string; value: React.ReactNode; caption?: string; accent: string }) {
+  return (
+    <div className="relative overflow-hidden rounded-2xl border border-[var(--border)]/45 bg-[var(--panel)]/70 p-4">
+      <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${accent}`} />
+      <div className="text-[11px] uppercase tracking-wide text-[var(--muted)]">{label}</div>
+      <div className="mt-2 text-2xl font-bold text-[var(--text)]">{value}</div>
+      {caption && <div className="mt-1 text-[11px] text-[var(--muted)]">{caption}</div>}
+    </div>
+  );
+}
+
+function VendorColumns({ suppliers, customers }: { suppliers: Aggregate[]; customers: Aggregate[] }) {
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-6 md:grid-cols-2">
+        <ColumnBlock title="Suppliers" items={suppliers} accent={SIDE_STYLES.supplier} />
+        <ColumnBlock title="Customers" items={customers} accent={SIDE_STYLES.customer} align="right" />
+      </div>
+    </div>
+  );
+}
+
+function ColumnBlock({
+  title,
+  items,
+  accent,
+  align = "left",
+}: {
+  title: string;
+  items: Aggregate[];
+  accent: Accent;
+  align?: "left" | "right";
 }) {
+  return (
+    <div className={align === "right" ? "space-y-3 md:items-end" : "space-y-3"}>
+      <div className={`flex items-center justify-between ${align === "right" ? "md:flex-row-reverse md:space-x-reverse" : ""}`}>
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <span className="text-xs text-[var(--muted)]">{items.length} counterparties</span>
+      </div>
+      <AnimatePresence initial={false}>
+        {items.map((item, idx) => (
+          <motion.div
+            key={`${title}-${item.name}-${idx}`}
+            layout
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.2 }}
+          >
+            <VendorCard item={item} accent={accent} />
+          </motion.div>
+        ))}
+      </AnimatePresence>
+      {items.length === 0 && <EmptyState text={`No ${title.toLowerCase()} match the current filters.`} align={align} />}
+    </div>
+  );
+}
+
+function VendorCard({ item, accent }: { item: Aggregate; accent: Accent }) {
+  const strength = Math.round((item.strength || 0) * 100);
+  const regions = item.regions.filter(Boolean);
+  const tiers = item.tiers.filter(Boolean);
+  const categories = item.categories.filter(Boolean);
+  const products = item.products.filter(Boolean);
+  const notes = Array.from(new Set(item.notes.filter(Boolean))).slice(0, 2);
+
+  return (
+    <div className={`relative overflow-hidden rounded-2xl border bg-[var(--panel)]/82 p-4 transition-all duration-200 ease-out ${accent.border} hover:border-white/40 hover:-translate-y-1`}>
+      <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${accent.gradient} opacity-80`} />
+      <div className="relative space-y-4">
+        <div className="flex items-start gap-4">
+          <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-[var(--border)]/60 bg-[var(--panel)]/80">
+            <CompanyLogo symbol={item.inferredTicker} name={item.name} className="h-full w-full" fallback={item.name} />
+          </div>
+          <div className="flex-1 space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-base font-semibold text-[var(--text)]">{item.name}</div>
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${accent.badge}`}>
+                <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                {item.side === "supplier" ? "Supplier" : "Customer"}
+              </span>
+            </div>
+            <div className="text-xs text-[var(--muted)]">
+              {products.slice(0, 2).join(" • ") || categories.slice(0, 2).join(" • ") || "No product metadata"}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3 text-xs">
+          <StatPill label="Strength" value={`${strength}%`} accent={accent} />
+          <StatPill label="Contracts" value={item.rows.length} caption="relationships" accent={accent} />
+          <StatPill label="Est. value" value={item.usdM ? `$${abbrevMoney(item.usdM)}+` : "Not disclosed"} accent={accent} />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Chip accent={accent}>{regions.length ? regions.join(" • ") : "Region N/A"}</Chip>
+          <Chip accent={accent}>{tiers.length ? `Tier ${tiers.join(", ")}` : "Tier N/A"}</Chip>
+          <Chip accent={accent}>{item.usdM ? `${item.rows.length} line items` : "Qualitative only"}</Chip>
+        </div>
+
+        {notes.length > 0 && (
+          <div className="rounded-2xl border border-[var(--border)]/40 bg-black/15 px-3 py-2 text-[11px] text-[var(--muted)]">
+            {notes.join(" • ")}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatPill({ label, value, caption, accent }: { label: string; value: React.ReactNode; caption?: string; accent: Accent }) {
+  return (
+    <div
+      className="rounded-2xl border border-[var(--border)]/40 bg-[var(--panel)]/70 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+      style={{ boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), 0 12px 26px rgba(8,12,35,0.22)" }}
+    >
+      <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{label}</div>
+      <div className="mt-1 text-sm font-semibold" style={{ color: accent.badgeColor }}>{value}</div>
+      {caption && <div className="text-[10px] text-[var(--muted)]">{caption}</div>}
+    </div>
+  );
+}
+
+function Chip({ children, accent }: { children: React.ReactNode; accent: Accent }) {
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] leading-tight ${accent.chip}`}>
+      {children}
+    </span>
+  );
+}
+
+function EmptyState({ text, align = "left" }: { text: string; align?: "left" | "right" }) {
+  return (
+    <div className={`rounded-2xl border border-dashed border-[var(--border)]/40 bg-[var(--panel)]/40 px-4 py-3 text-xs text-[var(--muted)] ${align === "right" ? "md:text-right" : ""}`}>
+      {text}
+    </div>
+  );
+}
+
+/* =========== Network Canvas =========== */
+function NetworkCanvas({ selected, graph }: { selected: { company: string; ticker: string }; graph: { nodes: Node[]; links: Link[]; dim: { W: number; H: number } } }) {
   const [hover, setHover] = useState<string | null>(null);
   const [modalNode, setModalNode] = useState<Node | null>(null);
   const [zoom, setZoom] = useState(1);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+
   useEffect(() => setZoom(1), [selected]);
 
-  const W = graph.dim?.W ?? 640, H = graph.dim?.H ?? 420;
-  const [logoIdx, setLogoIdx] = useState(0);
-  const centerLogoCandidates = useMemo(() => logoProvidersFromTicker(selected.ticker), [selected.ticker]);
-
-  const svgRef = useRef<SVGSVGElement | null>(null);
   useEffect(() => {
-    const el = svgRef.current; if (!el) return;
-    const onWheel = (e: WheelEvent) => { e.preventDefault(); setZoom(z => Math.max(0.7, Math.min(1.5, z + (e.deltaY > 0 ? -0.06 : 0.06)))); };
-    el.addEventListener("wheel", onWheel, { passive: false }); return () => el.removeEventListener("wheel", onWheel);
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setZoom((z) => Math.max(0.65, Math.min(1.6, z + (e.deltaY > 0 ? -0.08 : 0.08))));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const tipNode = hover ? graph.nodes.find(n => n.id === hover) : null;
+  const { nodes, links, dim } = graph;
+  const tipNode = hover ? nodes.find((n) => n.id === hover) : null;
+
+  const W = dim.W;
+  const H = dim.H;
 
   return (
-    <div className="mb-4 rounded-2xl border border-[var(--border)] bg-[var(--bg)]/[0.22] p-3 relative z-0">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-sm font-semibold">{selected.company} ({selected.ticker})</div>
+    <div className="rounded-2xl border border-[var(--border)]/50 bg-[var(--bg)]/[0.25] p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="font-semibold text-sm text-[var(--text)]">
+          {selected.company} ({selected.ticker})
+        </div>
         <div className="flex items-center gap-2">
-          <button className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5" onClick={()=>setZoom(z=>Math.max(0.7,z-0.1))}>−</button>
-          <span className="w-10 text-center text-xs">{Math.round(zoom*100)}%</span>
-          <button className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5" onClick={()=>setZoom(z=>Math.min(1.5,z+0.1))}>+</button>
-          <button className="rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5" onClick={()=>setZoom(1)}>Reset</button>
+          <button className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-white/5" onClick={() => setZoom((z) => Math.max(0.65, z - 0.1))}>
+            −
+          </button>
+          <span className="w-12 text-center">{Math.round(zoom * 100)}%</span>
+          <button className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-white/5" onClick={() => setZoom((z) => Math.min(1.6, z + 0.1))}>
+            +
+          </button>
+          <button className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-white/5" onClick={() => setZoom(1)}>
+            Reset
+          </button>
         </div>
       </div>
 
-      <div className="relative mx-auto max-w-3xl overflow-hidden rounded-xl">
-        {/* subtle particles */}
-        <div className="pointer-events-none absolute inset-0">
-          <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`}>
-            <g className="opacity-35">
-              {Array.from({ length: 24 }).map((_, i) => {
-                const x = (i * 97) % W, y = (i * 53) % H, r = 0.8 + ((i * 7) % 8) / 10, d = 42 + (i % 10) * 9;
-                return <circle key={i} cx={x} cy={y} r={r} fill="white" opacity="0.45" style={{ animation:`drift ${d}s linear infinite`, transformOrigin:`${x}px ${y}px` }} />;
-              })}
-            </g>
-          </svg>
-          <style>{`@keyframes drift{0%{transform:translateY(0);opacity:.32}50%{transform:translateY(-8px);opacity:.5}100%{transform:translateY(0);opacity:.32}}`}</style>
-        </div>
-
-        <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`} className="block relative" shapeRendering="geometricPrecision">
+      <div className="relative mx-auto max-w-3xl overflow-hidden rounded-xl bg-[var(--panel)]/70">
+        <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`} className="block" shapeRendering="geometricPrecision">
           <defs>
-            <linearGradient id="grad-supplier" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="var(--brand2)"/><stop offset="100%" stopColor="var(--text)"/></linearGradient>
-            <linearGradient id="grad-customer" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="var(--text)"/><stop offset="100%" stopColor="var(--brand1)"/></linearGradient>
+            <linearGradient id="grad-supplier" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#76fcb9" />
+              <stop offset="100%" stopColor="#3cc4ff" />
+            </linearGradient>
+            <linearGradient id="grad-customer" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#d5b3ff" />
+              <stop offset="100%" stopColor="#7f5bff" />
+            </linearGradient>
           </defs>
 
-          <g transform={`translate(${W/2} ${H/2}) scale(${zoom})`}>
-            {graph.links.map((l, i) => {
-              const s = graph.nodes.find(n => n.id === l.source)!;
-              const t = graph.nodes.find(n => n.id === l.target)!;
+          <g transform={`translate(${W / 2} ${H / 2}) scale(${zoom})`}>
+            {links.map((l, i) => {
+              const s = nodes.find((n) => n.id === l.source)!;
+              const t = nodes.find((n) => n.id === l.target)!;
               const sel = hover && (hover === s.id || hover === t.id);
-              const x1 = s.x, y1 = s.y, x2 = t.x, y2 = t.y;
-              const dx = x2 - x1, dy = y2 - y1, L = Math.sqrt(dx*dx + dy*dy);
-
-              const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
-              const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
               const grad = l.side === "supplier" ? "url(#grad-supplier)" : "url(#grad-customer)";
-              const w = sel ? l.weight + 1.4 : l.weight;
-
-              // BACKBONE (solid, always visible)
-              const baseOpacity = sel ? 0.35 : 0.25;
-
-              // Decorative dash selection
-              let dash: string | undefined;
-              if (L > 220) dash = "12 24";
-              else if (L > 160) dash = "8 16";
-              // <=160 -> solid decorative stroke too
-
-              // Randomized phase per edge so gaps never align invisibly
-              const seed = (i * 131) % 97;
-              const dashOffset = dash ? -(seed % 24) : 0;
-
-              // Mid chevron
-              const arrowSize = 8;
-              const poly = [
-                { x: 0, y: 0 },
-                { x: -arrowSize, y: arrowSize * 0.7 },
-                { x: -arrowSize * 0.4, y: 0 },
-                { x: -arrowSize, y: -arrowSize * 0.7 },
-              ];
-              const off = 14;
-              const rad = (ang * Math.PI) / 180;
-              const ix = mx + off * Math.cos(rad);
-              const iy = my + off * Math.sin(rad);
-              const glow = sel ? "0 0 18px rgba(255,255,255,.35)" : "0 0 0 rgba(0,0,0,0)";
-
+              const w = sel ? l.weight + 0.6 : l.weight + 0.25;
               return (
-                <g key={i} style={{ filter: `drop-shadow(${glow})` }}>
-                  {/* Solid backbone */}
-                  <line x1={x1} y1={y1} x2={x2} y2={y2}
-                        stroke={grad} strokeOpacity={baseOpacity} strokeWidth={Math.max(1.25, w * 0.45)} strokeLinecap="round" />
-                  {/* Decorative (dashed or solid) */}
-                  <line x1={x1} y1={y1} x2={x2} y2={y2}
-                        stroke={grad} strokeOpacity={sel ? 0.95 : 0.6} strokeWidth={w}
-                        strokeLinecap="round"
-                        {...(dash ? { strokeDasharray: dash, style: { animation: "flow 32s linear infinite", strokeDashoffset: dashOffset } } : {})}
+                <line
+                  key={`base-${i}`}
+                  x1={s.x}
+                  y1={s.y}
+                  x2={t.x}
+                  y2={t.y}
+                  stroke={grad}
+                  strokeWidth={Math.max(1.2, w * 0.3)}
+                  strokeLinecap="round"
+                  strokeOpacity={sel ? 0.4 : 0.22}
+                />
+              );
+            })}
+
+            {links.map((l, i) => {
+              const s = nodes.find((n) => n.id === l.source)!;
+              const t = nodes.find((n) => n.id === l.target)!;
+              const sel = hover && (hover === s.id || hover === t.id);
+              const x1 = s.x;
+              const y1 = s.y;
+              const x2 = t.x;
+              const y2 = t.y;
+              const L = Math.hypot(x2 - x1, y2 - y1);
+              const grad = l.side === "supplier" ? "url(#grad-supplier)" : "url(#grad-customer)";
+              const w = sel ? l.weight + 0.9 : l.weight + 0.5;
+              return (
+                <line
+                  key={`solid-${i}`}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke={grad}
+                  strokeWidth={Math.max(1.9, w * 0.38)}
+                  strokeLinecap="round"
+                  strokeOpacity={sel ? 0.92 : 0.7}
+                />
+              );
+            })}
+
+            {links.map((l, i) => {
+              const s = nodes.find((n) => n.id === l.source)!;
+              const t = nodes.find((n) => n.id === l.target)!;
+              const sel = hover && (hover === s.id || hover === t.id);
+              const x1 = s.x;
+              const y1 = s.y;
+              const x2 = t.x;
+              const y2 = t.y;
+              const L = Math.hypot(x2 - x1, y2 - y1);
+              const grad = l.side === "supplier" ? "url(#grad-supplier)" : "url(#grad-customer)";
+              const dash = L > 220 ? "14 26" : L > 160 ? "10 22" : "6 18";
+              const w = sel ? l.weight + 0.6 : l.weight + 0.1;
+              const angle = Math.atan2(y2 - y1, x2 - x1);
+              const arrowX = x1 + (x2 - x1) * 0.58;
+              const arrowY = y1 + (y2 - y1) * 0.58;
+              return (
+                <g key={`overlay-${i}`}>
+                  <line
+                    x1={x1}
+                    y1={y1}
+                    x2={x2}
+                    y2={y2}
+                    stroke={grad}
+                    strokeWidth={Math.max(1.3, w * 0.3)}
+                    strokeLinecap="round"
+                    strokeOpacity={sel ? 0.85 : 0.48}
+                    strokeDasharray={dash}
+                    style={dash ? { animation: "flow 28s linear infinite" } : undefined}
                   />
-                  {/* Midpoint chevron */}
-                  <g transform={`translate(${mx} ${my}) rotate(${ang})`}>
-                    <polygon points={poly.map(p => `${p.x},${p.y}`).join(" ")} fill="var(--text)" opacity={sel ? 0.95 : 0.8} />
-                  </g>
-                  {/* Midpoint icon */}
-                  <g transform={`translate(${ix} ${iy}) rotate(${ang})`}>
-                    <foreignObject x={-8} y={-8} width="16" height="16">
-                      <div className="h-4 w-4 rounded-full bg-[var(--panel)]/90 border border-[var(--border)] flex items-center justify-center">
-                        <EdgeIcon type={l.iconType}/>
-                      </div>
-                    </foreignObject>
+                  <g transform={`translate(${arrowX} ${arrowY}) rotate(${(angle * 180) / Math.PI})`}>
+                    <polygon points="0,0 -10,6 -10,-6" fill={l.side === "supplier" ? "#76fcb9" : "#b28bff"} opacity={sel ? 0.95 : 0.75} />
                   </g>
                 </g>
               );
             })}
 
-            {graph.nodes.map((n) => {
-              const cx = n.x, cy = n.y; const isCenter = n.side === "center";
-              const r = isCenter ? 30 : Math.max(9, Math.min(28, n.rPx));
-              const glow = hover === n.id ? "0 0 22px rgba(255,255,255,.25)" : "none";
+            {nodes.map((n) => {
+              const isCenter = n.side === "center";
+              const r = isCenter ? 30 : Math.max(12, Math.min(28, n.rPx));
+              const glow = hover === n.id ? "0 0 22px rgba(255,255,255,.35)" : "0 0 0 rgba(0,0,0,0)";
               return (
-                <g key={n.id} onMouseEnter={()=>setHover(n.id)} onMouseLeave={()=>setHover(null)}
-                   onClick={()=>!isCenter && setModalNode(n)} style={{ cursor: isCenter ? "default" : "pointer", filter: `drop-shadow(${glow})` }}>
-                  <circle cx={cx} cy={cy} r={r+4} fill="transparent" stroke="white" strokeOpacity={hover===n.id?0.18:0.08}/>
-                  <circle cx={cx} cy={cy} r={r} fill="var(--panel)" stroke="var(--border)" strokeWidth={1}/>
-                  {isCenter ? (
-                    <foreignObject x={cx-18} y={cy-18} width="36" height="36">
-                      <div className="h-9 w-9 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--panel)]">
-                        <img src={centerLogoCandidates[Math.min(logoIdx, centerLogoCandidates.length-1)]}
-                             alt={selected.ticker} className="h-full w-full object-contain" onError={()=>setLogoIdx(i=>i+1)} />
-                      </div>
-                    </foreignObject>
-                  ) : (
-                    <foreignObject x={cx-14} y={cy-14} width="28" height="28">
-                      <div className="h-7 w-7 overflow-hidden rounded bg-[var(--panel)]/60 border border-[var(--border)] flex items-center justify-center">
-                        <NodeBadge name={n.label} size={28} regions={n.regions} tickerHint={n.inferredTicker}/>
-                      </div>
-                    </foreignObject>
-                  )}
-                  <text x={cx} y={cy + r + 12} textAnchor="middle" className="fill-[var(--text)]" style={{ fontSize: "10px" }}>{n.label}</text>
+                <g
+                  key={n.id}
+                  onMouseEnter={() => setHover(n.id)}
+                  onMouseLeave={() => setHover(null)}
+                  onClick={() => !isCenter && setModalNode(n)}
+                  style={{ cursor: isCenter ? "default" : "pointer", filter: `drop-shadow(${glow})` }}
+                >
+                  <circle cx={n.x} cy={n.y} r={r + 4} fill="transparent" stroke="white" strokeOpacity={0.12} />
+                  <circle cx={n.x} cy={n.y} r={r} fill="var(--panel)" stroke="var(--border)" strokeWidth={1.2} />
+                  <foreignObject x={n.x - r + 4} y={n.y - r + 4} width={2 * (r - 4)} height={2 * (r - 4)}>
+                    <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-xl border border-[var(--border)]/40 bg-[var(--panel)]/60">
+                      <CompanyLogo symbol={n.inferredTicker} name={n.label} className="h-full w-full" fallback={n.label} />
+                    </div>
+                  </foreignObject>
+                  <text x={n.x} y={n.y + r + 14} textAnchor="middle" className="fill-[var(--text)]" style={{ fontSize: "10px" }}>
+                    {n.label}
+                  </text>
                 </g>
               );
             })}
@@ -609,18 +1022,24 @@ function NetworkCanvas({ selected, graph }: {
         </svg>
 
         {tipNode && (
-          <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg border border-[var(--border)] bg-[var(--panel)]/95 px-2 py-1 text-[11px]" style={{ boxShadow:"0 2px 18px rgba(0,0,0,0.15)" }}>
-            <div className="font-semibold">{tipNode.label}</div>
-            <div className="text-[var(--muted)]">{tipNode.side === "supplier" ? "Supplier → Company" : tipNode.side === "customer" ? "Company → Customer" : ""}</div>
+          <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg border border-[var(--border)] bg-[var(--panel)]/95 px-3 py-2 text-[11px]" style={{ boxShadow: "0 2px 18px rgba(0,0,0,0.22)" }}>
+            <div className="font-semibold text-[var(--text)]">{tipNode.label}</div>
+            <div className="text-[var(--muted)]">
+              {tipNode.side === "supplier"
+                ? "Supplier → Hub"
+                : tipNode.side === "customer"
+                ? "Hub → Customer"
+                : "Hub"}
+            </div>
             <div>Est. Contract: {abbrevMoney(tipNode.usdM)}</div>
-            <div>Rel. Strength: {(tipNode.strength*100).toFixed(0)}%</div>
+            <div>Rel. Strength: {(tipNode.strength * 100).toFixed(0)}%</div>
             {!!tipNode.tiers.length && <div>Tier: {tipNode.tiers.join(", ")}</div>}
             {!!tipNode.regions.length && <div>Region: {tipNode.regions.join(", ")}</div>}
           </div>
         )}
       </div>
 
-      {modalNode && <NodeModal node={modalNode} onClose={()=>setModalNode(null)}/>}
+      {modalNode && <NodeModal node={modalNode} onClose={() => setModalNode(null)} />}
     </div>
   );
 }
@@ -628,31 +1047,37 @@ function NetworkCanvas({ selected, graph }: {
 /* =========== Legend & Modal =========== */
 function Legend({ suppliers, customers }: { suppliers: number; customers: number }) {
   return (
-    <div className="mt-2 mb-4 flex flex-wrap items-center gap-3 text-xs text-[var(--muted)]">
-      <span className="inline-flex items-center gap-2"><span className="inline-block h-[10px] w-[18px] rounded border border-[var(--border)] bg-[var(--panel)]" /> Supplier <span className="opacity-70">({suppliers})</span></span>
-      <span className="inline-flex items-center gap-2"><span className="inline-block h-[10px] w-[18px] rounded border border-[var(--border)] bg-[var(--panel)]" /> Customer <span className="opacity-70">({customers})</span></span>
-      <span className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-full border border-[var(--border)]" /> Node size = contract value</span>
-      <span className="inline-flex items-center gap-2"><span className="inline-block h-2 w-6 rounded bg-white/40" /> Arrow width = relationship strength</span>
-      <span className="inline-flex items-center gap-2"><span className="inline-block h-2 w-6 rounded bg-white/40" /> Midpoint icon = product type</span>
+    <div className="mt-2 mb-4 flex flex-wrap items-center gap-4 text-xs text-[var(--muted)]">
+      <span className="inline-flex items-center gap-2"><span className="inline-block h-[10px] w-[18px] rounded border border-[#76fcb9]/40 bg-[#76fcb9]/20" /> Supplier <span className="opacity-70">({suppliers})</span></span>
+      <span className="inline-flex items-center gap-2"><span className="inline-block h-[10px] w-[18px] rounded border border-[#b28bff]/40 bg-[#b28bff]/20" /> Customer <span className="opacity-70">({customers})</span></span>
+      <span className="inline-flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-full border border-white/30" /> Node size = est. contract value</span>
+      <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-6 rounded bg-white/60" /> Stroke width = relationship strength</span>
+      <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-6 rounded bg-white/60" /> Chevron indicates direction of flow</span>
     </div>
   );
 }
+
 function NodeModal({ node, onClose }: { node: Node; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[240] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4" onClick={(e)=>e.stopPropagation()}>
-        <button onClick={onClose} className="absolute right-3 top-3 rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5">Close</button>
+      <div className="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute right-4 top-4 rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5">
+          Close
+        </button>
         <div className="mb-3">
           <div className="text-lg font-semibold">{node.label}</div>
-          <div className="text-xs text-[var(--muted)]">{node.side === "supplier" ? "Supplier" : node.side === "customer" ? "Customer" : ""}{node.count>1?` • ${node.count} links`:""}</div>
+          <div className="text-xs text-[var(--muted)]">
+            {node.side === "supplier" ? "Supplier" : node.side === "customer" ? "Customer" : "Hub"}
+            {node.count > 1 ? ` • ${node.count} links` : ""}
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-3 text-sm">
           <Info label="Est. Contract" value={abbrevMoney(node.usdM)} />
-          <Info label="Rel. Strength" value={`${(node.strength*100).toFixed(0)}%`} />
+          <Info label="Rel. Strength" value={`${(node.strength * 100).toFixed(0)}%`} />
           <Info label="Tier(s)" value={node.tiers.length ? node.tiers.join(", ") : "—"} />
           <Info label="Region(s)" value={node.regions.length ? node.regions.join(", ") : "—"} />
           <Info label="Category" value={node.categories.length ? node.categories.join(", ") : "—"} />
-          <Info label="Product/Component" value={node.products.length ? node.products.join(", ") : "—"} />
+          <Info label="Product" value={node.products.length ? node.products.join(", ") : "—"} />
           <div className="col-span-2">
             <div className="mb-1 text-xs text-[var(--muted)]">Notes</div>
             <div className="min-h-[48px] rounded-xl border border-[var(--border)] p-2 text-sm">{node.notes || "—"}</div>
@@ -662,6 +1087,12 @@ function NodeModal({ node, onClose }: { node: Node; onClose: () => void }) {
     </div>
   );
 }
+
 function Info({ label, value }: { label: string; value: string }) {
-  return (<div><div className="text-xs text-[var(--muted)]">{label}</div><div className="font-medium">{value}</div></div>);
+  return (
+    <div>
+      <div className="text-xs text-[var(--muted)]">{label}</div>
+      <div className="font-medium text-white/90">{value}</div>
+    </div>
+  );
 }

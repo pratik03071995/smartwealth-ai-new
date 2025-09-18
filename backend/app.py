@@ -5,6 +5,7 @@ import os, re
 from typing import List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from contextlib import contextmanager
+from decimal import Decimal
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -26,8 +27,10 @@ DATABRICKS_WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID")
 DATABRICKS_HTTP_PATH = f"/sql/1.0/warehouses/{DATABRICKS_WAREHOUSE_ID}" if DATABRICKS_WAREHOUSE_ID else None
 
 # ======== Tables ========
-EARNINGS_TABLE = "workspace.sw_gold.earnings_calendar_new"
-VENDOR_TABLE   = "workspace.sw_gold.vendor_customer_network"
+EARNINGS_TABLE  = "workspace.sw_gold.earnings_calendar_new"
+VENDOR_TABLE    = "workspace.sw_gold.vendor_customer_network"
+SCORES_TABLE    = os.getenv("SCORES_TABLE", "workspace.sw_gold.scores")
+PROFILES_TABLE  = os.getenv("PROFILES_TABLE", "workspace.sw_gold.nyse_profiles")
 
 # Candidate column names (earnings tolerant schema)
 DATE_CANDIDATES = ["event_date", "earnings_date", "report_date", "calendar_date", "date"]
@@ -41,6 +44,12 @@ EARNINGS_CACHE_LIMIT = int(os.getenv("EARNINGS_CACHE_LIMIT", "50000"))
 
 VENDOR_CACHE_TTL   = int(os.getenv("VENDOR_CACHE_TTL", "3600"))    # 60 min
 VENDOR_CACHE_LIMIT = int(os.getenv("VENDOR_CACHE_LIMIT", "200000"))
+
+SCORES_CACHE_TTL   = int(os.getenv("SCORES_CACHE_TTL", "600"))      # 10 min
+SCORES_CACHE_LIMIT = int(os.getenv("SCORES_CACHE_LIMIT", "200"))
+
+PROFILES_CACHE_TTL = int(os.getenv("PROFILES_CACHE_TTL", "900"))    # 15 min
+PROFILES_CACHE_LIMIT = int(os.getenv("PROFILES_CACHE_LIMIT", "5000"))
 
 # ---------------- helpers ----------------
 def _require_dbsql():
@@ -85,6 +94,14 @@ def _to_iso(dt) -> str | None:
         return dt.isoformat()
     except Exception:
         return None
+
+
+def _to_native(val):
+    if isinstance(val, Decimal):
+        return float(val)
+    if isinstance(val, datetime):
+        return val.isoformat()
+    return val
 
 def _normalize_earn_row(r: dict, used_date_col: str | None = None) -> dict | None:
     event_date = r.get("_event_date")
@@ -190,6 +207,103 @@ def _vendor_load_all(force: bool = False):
         cols = [d[0] for d in c.description]
         rows = [dict(zip(cols, r)) for r in c.fetchall()]
     _VENDOR_CACHE.update({"rows": rows, "ts": datetime.utcnow()})
+    return rows
+
+# ---------------- scores cache ----------------
+_SCORES_CACHE = {"rows": None, "ts": None}
+
+_PROFILES_CACHE = {"rows": None, "ts": None}
+
+
+def _scores_cache_stale() -> bool:
+    if not _SCORES_CACHE["rows"] or not _SCORES_CACHE["ts"]:
+        return True
+    return (datetime.utcnow() - _SCORES_CACHE["ts"]).total_seconds() > SCORES_CACHE_TTL
+
+
+def _scores_load_all(force: bool = False):
+    if not force and not _scores_cache_stale():
+        return _SCORES_CACHE["rows"]
+
+    q = f"""
+        SELECT symbol,
+               as_of,
+               sector,
+               industry,
+               px,
+               ev_ebitda,
+               score_fundamentals,
+               score_valuation,
+               score_sentiment,
+               score_innovation,
+               score_macro,
+               overall_score,
+               rank_overall
+        FROM {SCORES_TABLE}
+        WHERE rank_overall IS NOT NULL
+        ORDER BY rank_overall ASC
+        LIMIT {SCORES_CACHE_LIMIT}
+    """
+    with _db_cursor() as c:
+        c.execute(q)
+        cols = [d[0] for d in c.description]
+        raw_rows = [dict(zip(cols, r)) for r in c.fetchall()]
+
+    rows = []
+    for r in raw_rows:
+        clean = {k: _to_native(v) for k, v in r.items()}
+        if clean.get("as_of") and isinstance(clean["as_of"], str):
+            try:
+                clean["as_of"] = dateparser.parse(clean["as_of"]).date().isoformat()
+            except Exception:
+                pass
+        rows.append(clean)
+
+    _SCORES_CACHE.update({"rows": rows, "ts": datetime.utcnow()})
+    return rows
+
+
+def _profiles_cache_stale() -> bool:
+    if not _PROFILES_CACHE["rows"] or not _PROFILES_CACHE["ts"]:
+        return True
+    return (datetime.utcnow() - _PROFILES_CACHE["ts"]).total_seconds() > PROFILES_CACHE_TTL
+
+
+def _profiles_load_all(force: bool = False):
+    if not force and not _profiles_cache_stale():
+        return _PROFILES_CACHE["rows"]
+
+    q = f"""
+        SELECT symbol, price, marketCap, beta, lastDividend, `range`, change, changePercentage,
+               volume, averageVolume, companyName, currency, cik, isin, cusip,
+               exchangeFullName, exchange, industry, website, description,
+               ceo, sector, country, fullTimeEmployees, phone, address, city,
+               state, zip, image, ipoDate, defaultImage, isEtf, isActivelyTrading,
+               isAdr, isFund
+        FROM {PROFILES_TABLE}
+        ORDER BY companyName ASC
+        LIMIT {PROFILES_CACHE_LIMIT}
+    """
+
+    with _db_cursor() as c:
+        c.execute(q)
+        cols = [d[0] for d in c.description]
+        records = [dict(zip(cols, r)) for r in c.fetchall()]
+
+    rows: list[dict[str, Any]] = []
+    for r in records:
+        clean: dict[str, Any] = {}
+        for k, v in r.items():
+            if isinstance(v, Decimal):
+                clean[k] = float(v)
+            else:
+                clean[k] = v
+        ipo = clean.get("ipoDate")
+        if isinstance(ipo, datetime):
+            clean["ipoDate"] = ipo.date().isoformat()
+        rows.append(clean)
+
+    _PROFILES_CACHE.update({"rows": rows, "ts": datetime.utcnow()})
     return rows
 
 # ========================= Earnings API =========================
@@ -371,6 +485,56 @@ def vendors():
             {"name": "EDGAR", "status": "optional", "notes": "SEC filings"},
         ]
     })
+
+
+@app.get("/api/scores/ranked")
+def scores_ranked():
+    try:
+        refresh = request.args.get("refresh") == "1"
+        sector_filter = (request.args.get("sector") or "").strip().lower()
+
+        rows = _scores_load_all(force=refresh)
+        items = []
+        for r in rows:
+            if sector_filter and (r.get("sector") or "").strip().lower() != sector_filter:
+                continue
+            items.append(r)
+
+        resp = jsonify({
+            "count": len(items),
+            "items": items,
+            "cached_at": _SCORES_CACHE["ts"].isoformat() if _SCORES_CACHE["ts"] else None,
+        })
+        resp.headers["Cache-Control"] = "public, max-age=120"
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/companies/profiles")
+def companies_profiles():
+    try:
+        refresh = request.args.get("refresh") == "1"
+        query = (request.args.get("q") or "").strip().lower()
+
+        rows = _profiles_load_all(force=refresh)
+
+        if query:
+            def matches(r: dict) -> bool:
+                sym = (r.get("symbol") or "").lower()
+                name = (r.get("companyName") or "").lower()
+                sector = (r.get("sector") or "").lower()
+                return query in sym or query in name or query in sector
+
+            rows = [r for r in rows if matches(r)]
+
+        return jsonify({
+            "count": len(rows),
+            "items": rows,
+            "cached_at": _PROFILES_CACHE["ts"].isoformat() if _PROFILES_CACHE["ts"] else None,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.get("/api/sectors")
 def sectors():
