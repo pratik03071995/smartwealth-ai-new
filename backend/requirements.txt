@@ -3,3 +3,4 @@ flask-cors==4.0.1
 databricks-sql-connector
 python-dateutil
 python-dotenv
+gunicorn

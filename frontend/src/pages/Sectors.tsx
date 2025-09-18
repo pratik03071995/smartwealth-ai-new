@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react'
-import axios from 'axios'
-const api = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
+import api from '../services/api'
 
 export default function Sectors() {
   const [items, setItems] = useState<any[]>([])
   useEffect(() => { (async () => {
-    const { data } = await axios.get(`${api}/api/sectors`); setItems(data.items || [])
+    const { data } = await api.get('sectors');
+    setItems(data.items || [])
   })() }, [])
 
   return (

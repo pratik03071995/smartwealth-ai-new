@@ -1,11 +1,12 @@
 import React, { useRef, useState, useEffect } from 'react'
 import axios from 'axios'
+import { apiBase } from '../services/api'
 import { motion } from 'framer-motion'
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Legend, ReferenceLine
 } from 'recharts' // <-- Brush removed
 
-const api = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
+const API_BASE = apiBase
 type Msg = { role: 'user' | 'assistant', content: string }
 
 export default function Chat() {
@@ -50,7 +51,7 @@ export default function Chat() {
     const didGraph = maybeOpenGraph(text)
     setMessages(m => [...m, { role: 'user', content: text }])
     try {
-      const { data } = await axios.post(`${api}/api/chat`, { message: text })
+      const { data } = await axios.post(`${API_BASE}/chat`, { message: text })
       setMessages(m => [...m, { role: 'assistant', content: didGraph ? 'Opening a 5-year interactive chart…' : data.reply }])
     } catch {
       setMessages(m => [...m, { role: 'assistant', content: 'Error reaching API.' }])

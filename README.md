@@ -26,3 +26,48 @@ npm run dev
 - Pages: **Earnings**, **Scoring**, **Vendors**, **Sectors**
 - **Graph modal** pops when user types “graph/last 5 years” in chat
 - Tailwind glass & purple glow theme
+
+## Deploy to Azure VM
+The repository ships with Docker assets and helper scripts to run everything on a single Ubuntu VM.
+
+### One-time setup
+1. Provision an Ubuntu 22.04 VM (instructions in `deploy/azure/README.md`).
+2. Copy the repo to the VM, e.g.
+   ```bash
+   rsync -avz -e "ssh -i ~/.ssh/id_rsa" \
+     --exclude 'backend/venv' --exclude 'backend/.venv' \
+     --exclude 'frontend/node_modules' --exclude 'frontend/dist' \
+     --exclude '.git' --exclude '*.log' \
+     /path/to/smartwealth-ai-new/ \
+     azureuser@<vm-ip>:/opt/smartwealth-ai-new/
+   ```
+3. On the VM run `deploy/azure/setup.sh` to install Docker, then create `backend/.env` using `backend/.env.example` as a template.
+4. Start the stack:
+   ```bash
+   cd /opt/smartwealth-ai-new
+   docker compose build
+   docker compose up -d
+   ```
+
+### Deploying code updates
+1. From your local machine, resync the project (same `rsync` command as above; keep the excludes so cached dependencies are not copied).
+2. SSH into the VM and rebuild/restart the containers:
+   ```bash
+   ssh -i ~/.ssh/id_rsa azureuser@<vm-ip>
+   cd /opt/smartwealth-ai-new
+   docker compose build frontend  # or add "backend" if Python deps changed
+   docker compose up -d
+   ```
+3. Verify:
+   ```bash
+   docker compose ps
+   docker compose logs -f frontend
+   docker compose logs -f backend
+   ```
+4. Visit `http://<vm-ip>/` (or your domain) to confirm the UI and API respond.
+
+### Managing the service
+- Restart: `docker compose restart`
+- Stop: `docker compose down`
+- Run at boot: copy `deploy/azure/smartwealth.service` to `/etc/systemd/system/` and enable it (`sudo systemctl enable --now smartwealth.service`).
+- Rotate secrets: update `backend/.env`, then `docker compose up -d`.

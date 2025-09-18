@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { buildApiUrl } from "../services/api";
 
 /* ============== Types & API base ============== */
 type Item = {
@@ -16,8 +17,6 @@ type ApiAll = {
   cached_at?: string;
   error?: string;
 };
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || ""; // leave "" if Vite proxies /api → 5000
 
 /* ============== Date helpers ============== */
 const MONTHS = [
@@ -66,7 +65,7 @@ export default function Earnings() {
       setLoading(true); setErr(null);
       try {
         const from = iso(gridStart), to = iso(gridEnd);
-        const res = await fetch(`${API_BASE}/api/earnings/all?from=${from}&to=${to}`);
+        const res = await fetch(buildApiUrl(`earnings/all?from=${from}&to=${to}`));
         const j: ApiAll = await res.json();
         if (!res.ok || j.error) throw new Error(j.error || `HTTP ${res.status}`);
         if (!cancel) setData(j.items || []);

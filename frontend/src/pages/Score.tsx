@@ -1,6 +1,5 @@
 import React, { useState } from 'react'
-import axios from 'axios'
-const api = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
+import api from '../services/api'
 
 export default function Score() {
   const [symbol, setSymbol] = useState('AAPL')
@@ -10,7 +9,7 @@ export default function Score() {
   async function run() {
     setLoading(true)
     try {
-      const { data } = await axios.get(`${api}/api/score`, { params: { symbol } })
+      const { data } = await api.get('score', { params: { symbol } })
       setData(data)
     } finally { setLoading(false) }
   }

@@ -9,6 +9,9 @@ from contextlib import contextmanager
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dateutil import parser as dateparser
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ---------------- Databricks SQL connector ----------------
 try:

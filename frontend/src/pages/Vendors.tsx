@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { buildApiUrl } from "../services/api";
 
 /* =========== Types =========== */
 type Row = {
@@ -20,8 +21,6 @@ type Row = {
   cp_ticker?: string;
 };
 type VendorsResp = { count: number; items: Row[]; cached_at?: string; error?: string };
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 /* =========== Utils =========== */
 const toNum = (v: any): number | null => {
@@ -257,7 +256,7 @@ export default function Vendors() {
     (async () => {
       setLoading(true); setErr(null);
       try {
-        const res = await fetch(`${API_BASE}/api/vendors/network`);
+        const res = await fetch(buildApiUrl("vendors/network"));
         const j: VendorsResp = await res.json();
         if (!res.ok || j.error) throw new Error(j.error || `HTTP ${res.status}`);
         if (!cancel) setRows(j.items || []);
