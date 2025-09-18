@@ -1,73 +1,284 @@
-import React, { useRef, useState, useEffect } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import { apiBase } from '../services/api'
 import { motion } from 'framer-motion'
 import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, Legend, ReferenceLine
-} from 'recharts' // <-- Brush removed
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Legend,
+  ScatterChart,
+  Scatter,
+} from 'recharts'
 
 const API_BASE = apiBase
-type Msg = { role: 'user' | 'assistant', content: string }
 
-export default function Chat() {
-  const [messages, setMessages] = useState<Msg[]>([
-    { role: 'assistant', content: 'Hi! Ask me about earnings, scoring, or sectors. Try: “show AAPL last 5 years graph”.' }
-  ])
-  const [input, setInput] = useState('')
-  const [graphOpen, setGraphOpen] = useState(false)
-  const [graphReady, setGraphReady] = useState(false)
-  const [graphTitle, setGraphTitle] = useState('AAPL – Last 5 Years (Demo)')
-  const [graphData, setGraphData] = useState<{ t: string; v: number }[]>([])
-  const endRef = useRef<HTMLDivElement | null>(null)
+const compactCurrency = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 2,
+})
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+const standardCurrency = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 2,
+})
 
-  function buildDemoSeries(len = 60) {
-    const out: { t: string; v: number }[] = []; let val = 100
-    for (let i = len - 1; i >= 0; i--) {
-      const d = new Date(); d.setMonth(d.getMonth() - i)
-      val += (Math.random() - 0.4) * 2 + 0.6
-      out.push({ t: d.toLocaleDateString(undefined, { year: '2-digit', month: 'short' }), v: Math.round(val * 100) / 100 })
+const compactNumber = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 2,
+})
+
+const percentFormatter = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 2,
+})
+
+const METRIC_LABELS: Record<string, string> = {
+  marketCap: 'Market Cap',
+  price: 'Price',
+  lastDividend: 'Dividend',
+  change: 'Change',
+  changePercentage: 'Change %',
+  volume: 'Volume',
+  averageVolume: 'Avg Volume',
+  beta: 'Beta',
+  fullTimeEmployees: 'Employees',
+  score_innovation: 'Innovation Score',
+  score_sentiment: 'Sentiment Score',
+  score_valuation: 'Valuation Score',
+  score_fundamentals: 'Fundamentals Score',
+  score_macro: 'Macro Score',
+  overall_score: 'Overall Score',
+  guidanceEPS: 'Guidance EPS',
+  guidanceRevenue: 'Guidance Revenue',
+  revenue: 'Revenue',
+  revenueEstimate: 'Revenue Est.',
+  estimateEPS: 'Est. EPS',
+  consensusEPS: 'Consensus EPS',
+  relationship_strength: 'Relationship Strength',
+  est_contract_value_usd_m: 'Contract Value (USDm)',
+}
+
+type TableColumn = { key: string; label: string }
+type TablePayload = { columns: TableColumn[]; rows: Record<string, unknown>[] }
+type ChartDatum = { label: string; value: number; key?: string }
+type ChartFormat = 'currency' | 'number' | 'percent'
+type ScatterDatum = { label: string; x: number; y: number; size?: number }
+
+type ChartPayload =
+  | { type: 'bar'; title: string; metric?: string; format?: ChartFormat; data: ChartDatum[] }
+  | {
+      type: 'scatter'
+      title: string
+      xKey: string
+      yKey: string
+      format?: { x?: ChartFormat; y?: ChartFormat; size?: ChartFormat }
+      data: ScatterDatum[]
+      sizeKey?: string
     }
-    return out
+
+type AssistantMsg = {
+  role: 'assistant'
+  text: string
+  table?: TablePayload
+  chart?: ChartPayload | null
+  sql?: string | null
+}
+
+type UserMsg = { role: 'user'; text: string }
+type Msg = AssistantMsg | UserMsg
+
+const isAssistant = (msg: Msg): msg is AssistantMsg => msg.role === 'assistant'
+
+function formatCell(value: unknown, key: string): React.ReactNode {
+  if (value === null || value === undefined || value === '') return '—'
+
+  if (typeof value === 'number') {
+    if (key === 'marketCap') return compactCurrency.format(value)
+    if (key === 'price' || key === 'lastDividend' || key === 'change') return standardCurrency.format(value)
+    if (key === 'changePercentage') return `${percentFormatter.format(value)}%`
+    if (key === 'volume' || key === 'averageVolume' || key === 'fullTimeEmployees') return value.toLocaleString()
+    return compactNumber.format(value)
   }
 
-  function maybeOpenGraph(q: string) {
-    const s = q.toLowerCase()
-    if (/graph|chart|plot/.test(s) || /last\s*5\s*year/.test(s)) {
-      setGraphTitle('AAPL – Last 5 Years (Demo)')
-      setGraphData(buildDemoSeries())
-      setGraphOpen(true)
-      setGraphReady(false); setTimeout(() => setGraphReady(true), 50) // ensure modal paints before chart mounts
-      return true
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return '—'
+    if (/^https?:\/\//i.test(trimmed)) {
+      return (
+        <a href={trimmed} target="_blank" rel="noreferrer" className="text-[var(--brand2)] hover:underline">
+          Website
+        </a>
+      )
     }
-    return false
+    if (trimmed.length > 160) {
+      return <span title={trimmed}>{trimmed.slice(0, 140)}…</span>
+    }
+    return trimmed
+  }
+
+  return String(value)
+}
+
+function formatChartValue(value: unknown, format: ChartFormat | undefined) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return String(value ?? '')
+  if (format === 'currency') return compactCurrency.format(value)
+  if (format === 'percent') return `${percentFormatter.format(value)}%`
+  return compactNumber.format(value)
+}
+
+function metricLabel(metric?: string | null) {
+  if (!metric) return ''
+  if (metric === 'multi') return 'Metric Mix'
+  return METRIC_LABELS[metric] ?? metric
+}
+
+const BRAND_COLORS = {
+  primary: 'url(#swGradientPrimary)',
+  scatter: '#8B5CF6',
+  accent: '#EC4899',
+}
+
+const INITIAL_ASSISTANT: AssistantMsg = {
+  role: 'assistant',
+  text: 'Hi! Ask me about company fundamentals, earnings, scores, or vendor relationships. Try “Where is Meta headquartered?” or “Who are Nvidia’s customers?”.',
+}
+
+export default function Chat() {
+  const [messages, setMessages] = useState<Msg[]>([INITIAL_ASSISTANT])
+  const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [chartSpec, setChartSpec] = useState<ChartPayload | null>(null)
+  const [graphOpen, setGraphOpen] = useState(false)
+  const [graphReady, setGraphReady] = useState(false)
+  const endRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  function renderTable(table: TablePayload | undefined) {
+    if (!table || !table.rows?.length) return null
+
+    return (
+      <div className="mt-3 overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--bg)]/70 shadow-inner">
+        <table className="w-full min-w-[22rem] border-separate border-spacing-y-2 text-xs">
+          <thead className="bg-transparent text-[var(--muted)]">
+            <tr>
+              {table.columns.map((col) => (
+                <th key={col.key} className="px-3 py-2 text-left font-semibold uppercase tracking-wide">
+                  {col.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row, idx) => (
+              <tr
+                key={idx}
+                className="rounded-xl bg-[var(--panel)]/70 backdrop-blur transition hover:bg-[var(--panel)]/90"
+              >
+                {table.columns.map((col) => (
+                  <td key={col.key} className="px-3 py-3 align-top text-[var(--text)]">
+                    {formatCell(row[col.key], col.key)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
+  function handleOpenChart(spec: ChartPayload) {
+    setChartSpec(spec)
+    setGraphOpen(true)
+    setGraphReady(false)
+    setTimeout(() => setGraphReady(true), 40)
+  }
+
+  function clearConversation() {
+    setMessages([INITIAL_ASSISTANT])
+    setChartSpec(null)
+    setGraphOpen(false)
   }
 
   async function send() {
     const text = input.trim()
-    if (!text) return
+    if (!text || isLoading) return
+
     setInput('')
-    const didGraph = maybeOpenGraph(text)
-    setMessages(m => [...m, { role: 'user', content: text }])
+    setIsLoading(true)
+    setMessages((m) => [...m, { role: 'user', text }])
+
     try {
       const { data } = await axios.post(`${API_BASE}/chat`, { message: text })
-      setMessages(m => [...m, { role: 'assistant', content: didGraph ? 'Opening a 5-year interactive chart…' : data.reply }])
-    } catch {
-      setMessages(m => [...m, { role: 'assistant', content: 'Error reaching API.' }])
+      const assistant: AssistantMsg = {
+        role: 'assistant',
+        text: data?.reply || 'I could not craft a response for that.',
+        table: data?.table,
+        chart: data?.chart,
+        sql: data?.sql,
+      }
+      setMessages((m) => [...m, assistant])
+    } catch (err) {
+      setMessages((m) => [...m, { role: 'assistant', text: 'Error reaching API.' }])
+    } finally {
+      setIsLoading(false)
     }
   }
 
   return (
     <div className="relative z-10 mx-auto max-w-xl">
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4 backdrop-blur">
+        <div className="mb-3 flex items-center justify-between text-xs text-[var(--muted)]">
+          <span className="font-semibold tracking-wide uppercase">SmartWealth Assistant</span>
+          {messages.length > 1 ? (
+            <button
+              onClick={clearConversation}
+              className="rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-1 font-medium uppercase tracking-wide text-[var(--brand2)] transition hover:opacity-80"
+            >
+              Clear Chat
+            </button>
+          ) : null}
+        </div>
         {/* SCROLLABLE feed */}
         <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-2 scroll-slim">
           {messages.map((m, i) => (
-            <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-              className={`rounded-xl px-4 py-3 text-sm ${m.role === 'user' ? 'bg-[color:var(--brand2)]/20' : 'bg-[var(--panel)]'}`} >
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`rounded-xl px-4 py-3 text-sm ${m.role === 'user' ? 'bg-[color:var(--brand2)]/20' : 'bg-[var(--panel)]'}`}
+            >
               <div className="text-[10px] uppercase tracking-widest text-[var(--muted)]">{m.role}</div>
-              <div className="mt-1 leading-relaxed">{m.content}</div>
+              <div className="mt-1 space-y-3 leading-relaxed">
+                <div>{isAssistant(m) ? m.text : m.text}</div>
+                {isAssistant(m) && renderTable(m.table)}
+                {isAssistant(m) && m.chart?.data?.length ? (
+                  <button
+                    onClick={() => handleOpenChart(m.chart!)}
+                    className="rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs uppercase tracking-wide text-[var(--brand2)] hover:opacity-90"
+                  >
+                    Explore Chart
+                  </button>
+                ) : null}
+                {isAssistant(m) && m.sql ? (
+                  <details className="text-xs text-[var(--muted)]">
+                    <summary className="cursor-pointer select-none text-[var(--muted)]">Show SQL</summary>
+                    <pre className="mt-2 whitespace-pre-wrap rounded-xl bg-[var(--bg)]/70 p-3 text-[var(--muted)]">
+                      {m.sql}
+                    </pre>
+                  </details>
+                ) : null}
+              </div>
             </motion.div>
           ))}
           <div ref={endRef} />
@@ -77,66 +288,130 @@ export default function Chat() {
         <div className="mt-3 flex gap-2">
           <input
             className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel)] px-4 py-3 pr-10 outline-none placeholder:text-[var(--muted)]"
-            placeholder="Try: show AAPL last 5 years graph"
+            placeholder="Ask anything: 'Next earnings for Nvidia' or 'Address of BlackRock HQ'"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' ? send() : undefined}
+            onKeyDown={(e) => (e.key === 'Enter' ? send() : undefined)}
+            disabled={isLoading}
           />
-          <motion.button onClick={send} whileTap={{ scale: 0.98 }}
-            className="rounded-xl bg-[var(--brand2)] px-4 py-3 font-semibold text-[var(--btnText)] shadow-glow hover:opacity-90">
-            Send
+          <motion.button
+            onClick={send}
+            whileTap={{ scale: 0.98 }}
+            disabled={isLoading}
+            className={`rounded-xl bg-[var(--brand2)] px-4 py-3 font-semibold text-[var(--btnText)] shadow-glow hover:opacity-90 ${
+              isLoading ? 'opacity-60' : ''
+            }`}
+          >
+            {isLoading ? 'Thinking…' : 'Send'}
           </motion.button>
         </div>
       </div>
 
       {/* Chart Modal */}
-      {graphOpen && (
-        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">  {/* higher z-index */}
-          {/* darker overlay so text behind is not readable */}
+      {graphOpen && chartSpec ? (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/80 backdrop-blur" onClick={() => setGraphOpen(false)} />
           <div className="relative z-[1001] w-full max-w-4xl rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-5 shadow-glow">
             <div className="mb-3 flex items-center justify-between">
-              <div className="text-lg font-semibold">{graphTitle}</div>
+              <div className="text-lg font-semibold">{chartSpec.title}</div>
               <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-                <span className="rounded px-2 py-1 bg-[var(--panel)] border border-[var(--border)]">5Y</span>
-                <span className="rounded px-2 py-1 bg-[var(--panel)] border border-[var(--border)]">AAPL</span>
-                <button onClick={() => setGraphOpen(false)} className="ml-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-1 text-sm hover:opacity-90">Close</button>
+                {chartSpec.type === 'bar' && 'metric' in chartSpec && metricLabel(chartSpec.metric) ? (
+                  <span className="rounded px-2 py-1 border border-[var(--border)] bg-[var(--panel)]">
+                    {metricLabel(chartSpec.metric)}
+                  </span>
+                ) : null}
+                {chartSpec.type === 'scatter' ? (
+                  <>
+                    <span className="rounded px-2 py-1 border border-[var(--border)] bg-[var(--panel)]">
+                      X: {metricLabel(chartSpec.xKey)}
+                    </span>
+                    <span className="rounded px-2 py-1 border border-[var(--border)] bg-[var(--panel)]">
+                      Y: {metricLabel(chartSpec.yKey)}
+                    </span>
+                  </>
+                ) : null}
+                <button
+                  onClick={() => setGraphOpen(false)}
+                  className="rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-1 text-sm hover:opacity-90"
+                >
+                  Close
+                </button>
               </div>
             </div>
 
-            {/* Solid chart background to avoid any see-through */}
             <div className="h-[380px] w-full rounded-xl bg-[var(--bg)] p-1">
               {graphReady ? (
-                <ResponsiveContainer width="100%" height="100%" key={graphOpen ? 'open' : 'closed'} >
-                  <AreaChart data={graphData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="swFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--brand2)" stopOpacity={0.55} />
-                        <stop offset="100%" stopColor="var(--brand1)" stopOpacity={0.12} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="rgba(0,0,0,0.08)" className="dark:stroke-[rgba(255,255,255,0.09)]" />
-                    <XAxis dataKey="t" stroke="var(--muted)" fontSize={10} minTickGap={24} />
-                    <YAxis stroke="var(--muted)" fontSize={10} domain={['auto', 'auto']} />
-                    <Tooltip
-                      cursor={{ stroke: 'rgba(255,255,255,0.25)', strokeWidth: 1 }}
-                      contentStyle={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 12, color: 'var(--text)' }}
-                      formatter={(v: any) => [`$${Number(v).toFixed(2)}`, 'Value']}
-                      labelStyle={{ color: 'var(--muted)' }}
-                    />
-                    <Legend verticalAlign="top" height={24} wrapperStyle={{ color: 'var(--text)' }} />
-                    <ReferenceLine y={graphData.length ? graphData[graphData.length - 1].v : undefined} stroke="var(--accent-green)" strokeDasharray="4 4" opacity={0.6} />
-                    <Area type="monotone" name="AAPL (demo)" dataKey="v" stroke="var(--accent-green)" fill="url(#swFill)" strokeWidth={2.2} activeDot={{ r: 4 }} />
-                    {/* Brush removed */}
-                  </AreaChart>
+                <ResponsiveContainer width="100%" height="100%">
+                  {chartSpec.type === 'bar' ? (
+                    <BarChart data={chartSpec.data} margin={{ top: 10, right: 18, left: 4, bottom: 10 }}>
+                      <CartesianGrid stroke="rgba(0,0,0,0.08)" className="dark:stroke-[rgba(255,255,255,0.09)]" />
+                      <XAxis dataKey="label" stroke="var(--muted)" fontSize={10} minTickGap={16} interval="preserveStartEnd" />
+                      <YAxis
+                        stroke="var(--muted)"
+                        fontSize={10}
+                        width={70}
+                        tickFormatter={(value) => formatChartValue(value, chartSpec.format)}
+                      />
+                      <Tooltip
+                        cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                        contentStyle={{
+                          background: 'var(--bg)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 12,
+                          color: 'var(--text)',
+                        }}
+                        formatter={(v: unknown) => [formatChartValue(v, chartSpec.format), metricLabel(chartSpec.metric) || 'Value']}
+                        labelStyle={{ color: 'var(--muted)' }}
+                      />
+                      <Legend wrapperStyle={{ color: 'var(--text)' }} />
+                      <defs>
+                        <linearGradient id="swGradientPrimary" x1="0" y1="0" x2="1" y2="1">
+                          <stop offset="0%" stopColor="#8B5CF6" stopOpacity={1} />
+                          <stop offset="100%" stopColor="#EC4899" stopOpacity={1} />
+                        </linearGradient>
+                      </defs>
+                      <Bar
+                        dataKey="value"
+                        name={metricLabel(chartSpec.metric) || 'Value'}
+                        fill={BRAND_COLORS.primary}
+                        radius={[10, 10, 4, 4]}
+                      />
+                    </BarChart>
+                  ) : (
+                    <ScatterChart margin={{ top: 16, right: 24, bottom: 16, left: 24 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.3)" />
+                      <XAxis
+                        dataKey="x"
+                        name={metricLabel(chartSpec.xKey)}
+                        stroke="var(--muted)"
+                        tickFormatter={(value) => formatChartValue(value, chartSpec.format?.x)}
+                      />
+                      <YAxis
+                        dataKey="y"
+                        name={metricLabel(chartSpec.yKey)}
+                        stroke="var(--muted)"
+                        tickFormatter={(value) => formatChartValue(value, chartSpec.format?.y)}
+                      />
+                      <Tooltip
+                        cursor={{ strokeDasharray: '3 3' }}
+                        formatter={(value: unknown, name: string) => {
+                          if (name === 'x') return [formatChartValue(value, chartSpec.format?.x), metricLabel(chartSpec.xKey)]
+                          if (name === 'y') return [formatChartValue(value, chartSpec.format?.y), metricLabel(chartSpec.yKey)]
+                          return value as any
+                        }}
+                      />
+                      <Legend wrapperStyle={{ color: 'var(--text)' }} />
+                      <Scatter data={chartSpec.data} fill={BRAND_COLORS.scatter} />
+                    </ScatterChart>
+                  )}
                 </ResponsiveContainer>
               ) : (
-                <div className="h-full w-full grid place-items-center text-[var(--muted)] text-sm">Loading chart…</div>
+                <div className="grid h-full w-full place-items-center text-sm text-[var(--muted)]">Loading chart…</div>
               )}
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

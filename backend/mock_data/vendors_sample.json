@@ -1,0 +1,50 @@
+[
+  {
+    "company": "Apple Inc.",
+    "ticker": "AAPL",
+    "relation_type": "supplier",
+    "counterparty_name": "TSMC",
+    "counterparty_type": "manufacturer",
+    "tier": "Tier 1",
+    "category": "Semiconductors",
+    "component_or_product": "A-series Chips",
+    "region": "Asia",
+    "relationship_strength": 9.2,
+    "est_contract_value_usd_m": 8500,
+    "start_year": 2016,
+    "notes": "Primary foundry partner",
+    "is_dummy": false
+  },
+  {
+    "company": "Amazon.com, Inc.",
+    "ticker": "AMZN",
+    "relation_type": "customer",
+    "counterparty_name": "FedEx",
+    "counterparty_type": "logistics",
+    "tier": "Tier 1",
+    "category": "Logistics",
+    "component_or_product": "Parcel Delivery",
+    "region": "North America",
+    "relationship_strength": 7.5,
+    "est_contract_value_usd_m": 2400,
+    "start_year": 2018,
+    "notes": "Supports Prime shipping",
+    "is_dummy": false
+  },
+  {
+    "company": "Alphabet Inc.",
+    "ticker": "GOOGL",
+    "relation_type": "partner",
+    "counterparty_name": "Samsung",
+    "counterparty_type": "hardware",
+    "tier": "Tier 2",
+    "category": "Devices",
+    "component_or_product": "Android OEM",
+    "region": "Asia",
+    "relationship_strength": 8.4,
+    "est_contract_value_usd_m": 1500,
+    "start_year": 2012,
+    "notes": "Android ecosystem partner",
+    "is_dummy": false
+  }
+]
