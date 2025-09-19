@@ -94,6 +94,7 @@ type AssistantMsg = {
   prompt?: string
   feedback?: 'up' | 'down' | null
   plan?: Record<string, unknown> | null
+  followups?: string[] | null
 }
 
 type UserMsg = { role: 'user'; text: string }
@@ -177,6 +178,7 @@ const INITIAL_ASSISTANT: AssistantMsg = {
   id: 'welcome',
   feedback: null,
   plan: null,
+  followups: null,
 }
 
 export default function Chat() {
@@ -192,6 +194,7 @@ export default function Chat() {
   const pendingTimerRef = useRef<number | null>(null)
   const pendingStartRef = useRef<number | null>(null)
   const lastPromptRef = useRef('')
+  const inputRef = useRef<HTMLInputElement | null>(null)
   const chartHighlights = useMemo(() => {
     if (!chartSpec) return null
     if (chartSpec.type === 'bar') {
@@ -334,30 +337,69 @@ export default function Chat() {
     if (!msg.id) return null
     const busy = !!feedbackLoading[msg.id]
     const selected = msg.feedback ?? null
+    const latencyLabel =
+      typeof msg.latencyMs === 'number' && !Number.isNaN(msg.latencyMs)
+        ? `Answered in ${formatLatency(msg.latencyMs)}`
+        : null
     return (
-      <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-widest text-[var(--muted)]">
-        <span>Helpful?</span>
-        <button
-          type="button"
-          disabled={busy || selected === 'up'}
-          onClick={() => submitFeedback(msg, 'up')}
-          className={`rounded-full border border-[var(--border)] px-2.5 py-1 transition hover:opacity-80 ${
-            selected === 'up' ? 'bg-[var(--brand2)]/20 text-[var(--brand2)]' : 'bg-[var(--panel)]'
-          } ${busy ? 'opacity-50' : ''}`}
-        >
-          👍
-        </button>
-        <button
-          type="button"
-          disabled={busy || selected === 'down'}
-          onClick={() => submitFeedback(msg, 'down')}
-          className={`rounded-full border border-[var(--border)] px-2.5 py-1 transition hover:opacity-80 ${
-            selected === 'down' ? 'bg-red-500/20 text-red-400' : 'bg-[var(--panel)]'
-          } ${busy ? 'opacity-50' : ''}`}
-        >
-          👎
-        </button>
-        {selected ? <span className="text-[var(--brand2)]">Thanks!</span> : null}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[9px] uppercase tracking-wider text-[var(--muted)]">
+        <div className="flex items-center gap-1 sm:gap-2">
+          <span className="opacity-80">Helpful?</span>
+          <button
+            type="button"
+            disabled={busy || selected === 'up'}
+            onClick={() => submitFeedback(msg, 'up')}
+            className={`group rounded-full border border-[var(--border)] bg-[var(--panel)]/80 px-2 py-[5px] transition hover:bg-[var(--panel)] ${
+              selected === 'up' ? 'shadow-[0_0_12px_rgba(91,136,251,0.35)] text-[var(--brand2)]' : 'text-[var(--text)]'
+            } ${busy ? 'opacity-50' : ''}`}
+          >
+            <span className="inline-flex items-center gap-1">
+              <span className="text-base leading-none">👍</span>
+              <span className="hidden sm:inline">Yes</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={busy || selected === 'down'}
+            onClick={() => submitFeedback(msg, 'down')}
+            className={`group rounded-full border border-[var(--border)] bg-[var(--panel)]/80 px-2 py-[5px] transition hover:bg-[var(--panel)] ${
+              selected === 'down' ? 'shadow-[0_0_12px_rgba(239,68,68,0.35)] text-red-400' : 'text-[var(--text)]'
+            } ${busy ? 'opacity-50' : ''}`}
+          >
+            <span className="inline-flex items-center gap-1">
+              <span className="text-base leading-none">👎</span>
+              <span className="hidden sm:inline">No</span>
+            </span>
+          </button>
+          {selected ? <span className="text-[var(--brand2)]">Appreciated!</span> : null}
+        </div>
+        {latencyLabel ? (
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--panel)]/60 px-2.5 py-[4px] text-[8px] uppercase tracking-[0.18em] text-[var(--muted)]">
+            <span className="h-1 w-1 rounded-full bg-[var(--brand2)]/70" />
+            {latencyLabel}
+          </span>
+        ) : null}
+      </div>
+    )
+  }
+
+  function renderFollowupChips(msg: AssistantMsg) {
+    if (!msg.followups || msg.followups.length === 0) return null
+    return (
+      <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] text-[var(--muted)]">
+        {msg.followups.slice(0, 4).map((tip, idx) => (
+          <button
+            key={`${msg.id}-followup-${idx}`}
+            type="button"
+            onClick={() => {
+              send(tip)
+              setTimeout(() => inputRef.current?.focus(), 0)
+            }}
+            className="rounded-full border border-[var(--border)] bg-[var(--panel)] px-2 py-[5px] text-[9px] uppercase tracking-wider text-[var(--brand2)] transition hover:bg-[var(--panel)]/80"
+          >
+            {tip}
+          </button>
+        ))}
       </div>
     )
   }
@@ -376,8 +418,8 @@ export default function Chat() {
     setFeedbackLoading({})
   }
 
-  async function send() {
-    const text = input.trim()
+  async function send(messageOverride?: string) {
+    const text = (messageOverride ?? input).trim()
     if (!text || isLoading) return
 
     setInput('')
@@ -402,6 +444,7 @@ export default function Chat() {
         prompt: lastPromptRef.current,
         feedback: null,
         plan: data?.plan ?? null,
+        followups: (data?.followups as string[] | undefined) ?? null,
       }
       setMessages((m) => [...m, assistant])
     } catch (err) {
@@ -414,6 +457,7 @@ export default function Chat() {
         prompt: lastPromptRef.current,
         feedback: null,
         plan: null,
+        followups: null,
       }
       setMessages((m) => [...m, fallback])
     } finally {
@@ -431,7 +475,7 @@ export default function Chat() {
               <motion.span
                 initial={{ opacity: 0, y: -2 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel)] px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--brand2)] shadow-glow"
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel)] px-2.5 py-[6px] text-[9px] uppercase tracking-wider text-[var(--brand2)] shadow-glow"
               >
                 <span className="relative flex h-2 w-2">
                   <span className="absolute inset-0 rounded-full bg-[var(--brand2)]/70 animate-ping" />
@@ -462,17 +506,6 @@ export default function Chat() {
               <div className="text-[10px] uppercase tracking-widest text-[var(--muted)]">{m.role}</div>
               <div className="mt-1 space-y-3 leading-relaxed">
                 <div>{isAssistant(m) ? m.text : m.text}</div>
-                {isAssistant(m) && typeof m.latencyMs === 'number' ? (
-                  <motion.div
-                    initial={{ opacity: 0, y: -4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.05 }}
-                    className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg)]/60 px-3 py-1 text-[10px] uppercase tracking-widest text-[var(--muted)] backdrop-blur"
-                  >
-                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand2)]" />
-                    Answered in {formatLatency(m.latencyMs)}
-                  </motion.div>
-                ) : null}
                 {isAssistant(m) && renderTable(m.table)}
                 {isAssistant(m) && m.chart?.data?.length ? (
                   <button
@@ -490,6 +523,7 @@ export default function Chat() {
                     </pre>
                   </details>
                 ) : null}
+                {isAssistant(m) ? renderFollowupChips(m) : null}
                 {isAssistant(m) && m.id !== 'welcome' ? renderFeedbackControls(m) : null}
               </div>
             </motion.div>
@@ -506,9 +540,10 @@ export default function Chat() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => (e.key === 'Enter' ? send() : undefined)}
             disabled={isLoading}
+            ref={inputRef}
           />
           <motion.button
-            onClick={send}
+            onClick={() => send()}
             whileTap={{ scale: 0.98 }}
             disabled={isLoading}
             className={`rounded-xl bg-[var(--brand2)] px-4 py-3 font-semibold text-[var(--btnText)] shadow-glow hover:opacity-90 ${
