@@ -544,7 +544,7 @@ export default function Vendors() {
       <header className="space-y-2">
         <h1 className="text-3xl md:text-4xl font-extrabold">Vendor Network Intelligence</h1>
         <p className="text-sm text-[var(--muted)]">
-          Explore supplier and customer relationships with live metrics pulled from the SmartWealth Databricks warehouse.
+          Explore supplier and customer relationships with live metrics pulled from the SmartWealth warehouse.
         </p>
         {rows.length > 0 && (
           <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/60 px-3 py-1 text-xs text-[var(--muted)]">

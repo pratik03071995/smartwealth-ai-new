@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import { apiBase } from '../services/api'
 import { motion } from 'framer-motion'
@@ -89,6 +89,7 @@ type AssistantMsg = {
   table?: TablePayload
   chart?: ChartPayload | null
   sql?: string | null
+  latencyMs?: number
 }
 
 type UserMsg = { role: 'user'; text: string }
@@ -145,6 +146,16 @@ const BRAND_COLORS = {
   accent: '#EC4899',
 }
 
+function formatLatency(raw: number | undefined) {
+  if (raw === undefined || Number.isNaN(raw)) return ''
+  if (raw < 1000) return `${Math.round(raw)} ms`
+  if (raw < 60000) return `${(raw / 1000).toFixed(raw < 10000 ? 2 : 1)} s`
+  const totalSeconds = Math.round(raw / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`
+}
+
 const INITIAL_ASSISTANT: AssistantMsg = {
   role: 'assistant',
   text: 'Hi! Ask me about company fundamentals, earnings, scores, or vendor relationships. Try “Where is Meta headquartered?” or “Who are Nvidia’s customers?”.',
@@ -157,11 +168,74 @@ export default function Chat() {
   const [chartSpec, setChartSpec] = useState<ChartPayload | null>(null)
   const [graphOpen, setGraphOpen] = useState(false)
   const [graphReady, setGraphReady] = useState(false)
+  const [pendingLatencyMs, setPendingLatencyMs] = useState(0)
   const endRef = useRef<HTMLDivElement | null>(null)
+  const pendingTimerRef = useRef<number | null>(null)
+  const pendingStartRef = useRef<number | null>(null)
+  const chartHighlights = useMemo(() => {
+    if (!chartSpec) return null
+    if (chartSpec.type === 'bar') {
+      const dataset = (chartSpec.data || []).filter((item) => typeof item.value === 'number')
+      if (!dataset.length) return null
+      const sorted = [...dataset].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+      const total = dataset.reduce((acc, cur) => acc + (cur.value ?? 0), 0)
+      return {
+        kind: 'bar' as const,
+        top: sorted[0],
+        low: sorted[sorted.length - 1],
+        average: total / dataset.length,
+      }
+    }
+    if (chartSpec.type === 'scatter') {
+      const dataset = (chartSpec.data || []).filter(
+        (item) => typeof item.x === 'number' && typeof item.y === 'number' && !Number.isNaN(item.x) && !Number.isNaN(item.y),
+      )
+      if (!dataset.length) return null
+      const orderedByY = [...dataset].sort((a, b) => b.y - a.y)
+      const centroid = dataset.reduce(
+        (acc, cur) => ({ x: acc.x + cur.x, y: acc.y + cur.y }),
+        { x: 0, y: 0 },
+      )
+      const count = dataset.length
+      return {
+        kind: 'scatter' as const,
+        highest: orderedByY[0],
+        lowest: orderedByY[orderedByY.length - 1],
+        centroid: { x: centroid.x / count, y: centroid.y / count },
+      }
+    }
+    return null
+  }, [chartSpec])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+    if (isLoading) {
+      pendingStartRef.current = now()
+      if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
+      pendingTimerRef.current = window.setInterval(() => {
+        if (pendingStartRef.current) {
+          setPendingLatencyMs(now() - pendingStartRef.current)
+        }
+      }, 120)
+      return () => {
+        if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
+      }
+    }
+
+    if (pendingTimerRef.current) {
+      window.clearInterval(pendingTimerRef.current)
+      pendingTimerRef.current = null
+    }
+    pendingStartRef.current = null
+    setPendingLatencyMs(0)
+    return () => {
+      if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
+    }
+  }, [isLoading])
 
   function renderTable(table: TablePayload | undefined) {
     if (!table || !table.rows?.length) return null
@@ -217,15 +291,19 @@ export default function Chat() {
     setInput('')
     setIsLoading(true)
     setMessages((m) => [...m, { role: 'user', text }])
+    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
 
     try {
       const { data } = await axios.post(`${API_BASE}/chat`, { message: text })
+      const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      const latencyMs = Math.max(0, endedAt - startedAt)
       const assistant: AssistantMsg = {
         role: 'assistant',
         text: data?.reply || 'I could not craft a response for that.',
         table: data?.table,
         chart: data?.chart,
         sql: data?.sql,
+        latencyMs,
       }
       setMessages((m) => [...m, assistant])
     } catch (err) {
@@ -240,14 +318,29 @@ export default function Chat() {
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4 backdrop-blur">
         <div className="mb-3 flex items-center justify-between text-xs text-[var(--muted)]">
           <span className="font-semibold tracking-wide uppercase">SmartWealth Assistant</span>
-          {messages.length > 1 ? (
-            <button
-              onClick={clearConversation}
-              className="rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-1 font-medium uppercase tracking-wide text-[var(--brand2)] transition hover:opacity-80"
-            >
-              Clear Chat
-            </button>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {isLoading ? (
+              <motion.span
+                initial={{ opacity: 0, y: -2 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel)] px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--brand2)] shadow-glow"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inset-0 rounded-full bg-[var(--brand2)]/70 animate-ping" />
+                  <span className="relative h-2 w-2 rounded-full bg-[var(--brand2)]" />
+                </span>
+                Synthesizing • {formatLatency(pendingLatencyMs) || '…'}
+              </motion.span>
+            ) : null}
+            {messages.length > 1 ? (
+              <button
+                onClick={clearConversation}
+                className="rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-1 font-medium uppercase tracking-wide text-[var(--brand2)] transition hover:opacity-80"
+              >
+                Clear Chat
+              </button>
+            ) : null}
+          </div>
         </div>
         {/* SCROLLABLE feed */}
         <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-2 scroll-slim">
@@ -261,6 +354,17 @@ export default function Chat() {
               <div className="text-[10px] uppercase tracking-widest text-[var(--muted)]">{m.role}</div>
               <div className="mt-1 space-y-3 leading-relaxed">
                 <div>{isAssistant(m) ? m.text : m.text}</div>
+                {isAssistant(m) && typeof m.latencyMs === 'number' ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.05 }}
+                    className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg)]/60 px-3 py-1 text-[10px] uppercase tracking-widest text-[var(--muted)] backdrop-blur"
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand2)]" />
+                    Answered in {formatLatency(m.latencyMs)}
+                  </motion.div>
+                ) : null}
                 {isAssistant(m) && renderTable(m.table)}
                 {isAssistant(m) && m.chart?.data?.length ? (
                   <button
@@ -288,7 +392,7 @@ export default function Chat() {
         <div className="mt-3 flex gap-2">
           <input
             className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel)] px-4 py-3 pr-10 outline-none placeholder:text-[var(--muted)]"
-            placeholder="Ask anything: 'Next earnings for Nvidia' or 'Address of BlackRock HQ'"
+            placeholder=" "
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => (e.key === 'Enter' ? send() : undefined)}
@@ -339,12 +443,70 @@ export default function Chat() {
               </div>
             </div>
 
-            <div className="h-[380px] w-full rounded-xl bg-[var(--bg)] p-1">
+            {chartHighlights && chartSpec ? (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-4 grid gap-3 rounded-2xl border border-[var(--border)]/70 bg-[var(--panel)]/70 p-4 text-xs text-[var(--muted)] md:grid-cols-3"
+              >
+                {chartHighlights.kind === 'bar' && chartSpec.type === 'bar' ? (
+                  <>
+                    <div className="rounded-xl border border-[var(--border)]/60 bg-[var(--bg)]/80 p-3 shadow-inner">
+                      <div className="mb-1 text-[10px] uppercase tracking-widest text-[var(--muted)]">Top Performer</div>
+                      <div className="text-sm font-semibold text-[var(--text)]">{chartHighlights.top.label}</div>
+                      <div className="mt-1 text-[var(--brand2)]">{formatChartValue(chartHighlights.top.value, chartSpec.format)}</div>
+                    </div>
+                    <div className="rounded-xl border border-[var(--border)]/60 bg-[var(--bg)]/80 p-3 shadow-inner">
+                      <div className="mb-1 text-[10px] uppercase tracking-widest text-[var(--muted)]">Average</div>
+                      <div className="text-sm font-semibold text-[var(--text)]">
+                        {metricLabel(chartSpec.metric) || 'Metric'}
+                      </div>
+                      <div className="mt-1 text-[var(--brand2)]">{formatChartValue(chartHighlights.average, chartSpec.format)}</div>
+                    </div>
+                    <div className="rounded-xl border border-[var(--border)]/60 bg-[var(--bg)]/80 p-3 shadow-inner">
+                      <div className="mb-1 text-[10px] uppercase tracking-widest text-[var(--muted)]">Trailing</div>
+                      <div className="text-sm font-semibold text-[var(--text)]">{chartHighlights.low.label}</div>
+                      <div className="mt-1 text-[var(--brand2)]">{formatChartValue(chartHighlights.low.value, chartSpec.format)}</div>
+                    </div>
+                  </>
+                ) : null}
+                {chartHighlights.kind === 'scatter' && chartSpec.type === 'scatter' ? (
+                  <>
+                    <div className="rounded-xl border border-[var(--border)]/60 bg-[var(--bg)]/80 p-3 shadow-inner">
+                      <div className="mb-1 text-[10px] uppercase tracking-widest text-[var(--muted)]">Peak Signal</div>
+                      <div className="text-sm font-semibold text-[var(--text)]">{chartHighlights.highest.label}</div>
+                      <div className="mt-1 text-[var(--brand2)]">
+                        {formatChartValue(chartHighlights.highest.y, chartSpec.format?.y)}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-[var(--border)]/60 bg-[var(--bg)]/80 p-3 shadow-inner">
+                      <div className="mb-1 text-[10px] uppercase tracking-widest text-[var(--muted)]">Centroid</div>
+                      <div className="text-sm font-semibold text-[var(--text)]">
+                        {formatChartValue(chartHighlights.centroid.x, chartSpec.format?.x)}
+                        <span className="mx-1 text-[var(--muted)]">/</span>
+                        {formatChartValue(chartHighlights.centroid.y, chartSpec.format?.y)}
+                      </div>
+                      <div className="mt-1 text-[var(--muted)]">Average position</div>
+                    </div>
+                    <div className="rounded-xl border border-[var(--border)]/60 bg-[var(--bg)]/80 p-3 shadow-inner">
+                      <div className="mb-1 text-[10px] uppercase tracking-widest text-[var(--muted)]">Baseline</div>
+                      <div className="text-sm font-semibold text-[var(--text)]">{chartHighlights.lowest.label}</div>
+                      <div className="mt-1 text-[var(--brand2)]">
+                        {formatChartValue(chartHighlights.lowest.y, chartSpec.format?.y)}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </motion.div>
+            ) : null}
+
+            <div className="relative h-[380px] w-full overflow-hidden rounded-2xl border border-[var(--border)]/60 bg-gradient-to-br from-[var(--panel)] via-[var(--bg)] to-[var(--bg)] p-3">
+              <div className="pointer-events-none absolute inset-0 rounded-[inherit] bg-[radial-gradient(circle_at_top,var(--brand2)/20,transparent_60%)]" />
               {graphReady ? (
                 <ResponsiveContainer width="100%" height="100%">
                   {chartSpec.type === 'bar' ? (
-                    <BarChart data={chartSpec.data} margin={{ top: 10, right: 18, left: 4, bottom: 10 }}>
-                      <CartesianGrid stroke="rgba(0,0,0,0.08)" className="dark:stroke-[rgba(255,255,255,0.09)]" />
+                    <BarChart data={chartSpec.data} margin={{ top: 18, right: 24, left: 4, bottom: 24 }}>
+                      <CartesianGrid stroke="rgba(148,163,184,0.18)" strokeDasharray="4 6" />
                       <XAxis dataKey="label" stroke="var(--muted)" fontSize={10} minTickGap={16} interval="preserveStartEnd" />
                       <YAxis
                         stroke="var(--muted)"
@@ -363,7 +525,7 @@ export default function Chat() {
                         formatter={(v: unknown) => [formatChartValue(v, chartSpec.format), metricLabel(chartSpec.metric) || 'Value']}
                         labelStyle={{ color: 'var(--muted)' }}
                       />
-                      <Legend wrapperStyle={{ color: 'var(--text)' }} />
+                      <Legend wrapperStyle={{ color: 'var(--text)' }} iconType="circle" />
                       <defs>
                         <linearGradient id="swGradientPrimary" x1="0" y1="0" x2="1" y2="1">
                           <stop offset="0%" stopColor="#8B5CF6" stopOpacity={1} />
@@ -375,10 +537,18 @@ export default function Chat() {
                         name={metricLabel(chartSpec.metric) || 'Value'}
                         fill={BRAND_COLORS.primary}
                         radius={[10, 10, 4, 4]}
+                        stroke="rgba(236,72,153,0.4)"
+                        strokeWidth={1.2}
                       />
                     </BarChart>
                   ) : (
-                    <ScatterChart margin={{ top: 16, right: 24, bottom: 16, left: 24 }}>
+                    <ScatterChart margin={{ top: 20, right: 36, bottom: 24, left: 32 }}>
+                      <defs>
+                        <radialGradient id="swScatter" cx="50%" cy="50%" r="50%">
+                          <stop offset="0%" stopColor="#8B5CF6" stopOpacity={0.9} />
+                          <stop offset="100%" stopColor="#EC4899" stopOpacity={0.35} />
+                        </radialGradient>
+                      </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.3)" />
                       <XAxis
                         dataKey="x"
@@ -399,9 +569,16 @@ export default function Chat() {
                           if (name === 'y') return [formatChartValue(value, chartSpec.format?.y), metricLabel(chartSpec.yKey)]
                           return value as any
                         }}
+                        labelStyle={{ color: 'var(--muted)' }}
+                        contentStyle={{
+                          background: 'var(--bg)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 12,
+                          color: 'var(--text)',
+                        }}
                       />
                       <Legend wrapperStyle={{ color: 'var(--text)' }} />
-                      <Scatter data={chartSpec.data} fill={BRAND_COLORS.scatter} />
+                      <Scatter data={chartSpec.data} fill="url(#swScatter)" line shape="circle" />
                     </ScatterChart>
                   )}
                 </ResponsiveContainer>

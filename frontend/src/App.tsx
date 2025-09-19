@@ -80,10 +80,9 @@ export default function App() {
       <footer className="border-t border-[var(--border)] bg-gradient-to-b from-transparent to-[color:var(--bg)]">
         <div className="mx-auto max-w-6xl px-6 py-8 grid gap-6 md:grid-cols-3">
           <div className="opacity-80">
-            <div className="font-semibold mb-1">SmartWealth AI</div>
-            <div className="text-sm">Build. Learn. Invest smarter.</div>
+            <div className="text-sm">©2025 SmartWealth AI • AI-assisted research platform</div>
           </div>
-          <div className="opacity-80 text-sm">Built with ❤️ using Vite, React, Tailwind.</div>
+          <div className="opacity-80 text-sm"></div>
           <FooterThemeToggle />
         </div>
       </footer>
@@ -292,7 +291,7 @@ function FooterThemeToggle() {
   }, [])
   return (
     <div className="flex flex-col items-center md:items-end gap-3">
-      <div className="text-[var(--muted)]">Controls</div>
+      <div className="text-[var(--muted)]"></div>
       <button
         onClick={() => {
           const next = theme === 'dark' ? 'light' : 'dark'
