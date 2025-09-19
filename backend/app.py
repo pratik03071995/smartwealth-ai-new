@@ -299,7 +299,9 @@ SYMBOL_STOPWORDS = {
     "A", "AN", "AND", "THE", "OF", "FOR", "WITH", "VS", "VERSUS", "PLEASE",
     "SHOW", "ABOUT", "ON", "IN", "COMPARE", "TO", "FROM", "US",
     "WE", "YOU", "HELP", "INFO", "DATA", "STOCK", "COMPANY", "CAP", "MARKET",
-    "LIST", "GIVE", "WHAT", "IS", "ARE", "DO", "PLEASE", "HELP", "JUST"
+    "LIST", "GIVE", "WHAT", "IS", "ARE", "DO", "PLEASE", "HELP", "JUST",
+    "WHERE", "WHEN", "ME", "VALUE", "DEAL", "ISIN", "CUSIP", "RELATION", "RELATIONSHIP",
+    "CUSTOMER", "SUPPLIER", "VENDOR", "CLIENT", "PARTNER", "GUIDANCE"
 }
 
 SYMBOL_SYNONYMS = {
@@ -316,7 +318,20 @@ SYMBOL_SYNONYMS = {
     "riot": "RIOT",
     "unitedhealth": "UNH",
     "berkshire": "BRK.B",
-    "broadcom": "AVGO"
+    "broadcom": "AVGO",
+    "netflix": "NFLX",
+    "advanced micro devices": "AMD",
+    "amd": "AMD",
+    "salesforce": "CRM",
+    "snowflake": "SNOW",
+    "uber": "UBER",
+    "visa": "V",
+    "mastercard": "MA",
+    "oracle": "ORCL",
+    "intel": "INTC",
+    "qualcomm": "QCOM",
+    "disney": "DIS",
+    "adobe": "ADBE",
 }
 
 SYMBOL_SYNONYMS_SLUG = { _slugify_word(k): v.upper() for k, v in SYMBOL_SYNONYMS.items() }
@@ -694,10 +709,55 @@ def _add_columns_from_keywords(plan: ChatPlan, prompt: str) -> None:
     if not mapping:
         return
     text = prompt.lower()
+    def _contains_keyword(keyword: str) -> bool:
+        keyword = keyword.lower()
+        if not keyword:
+            return False
+        if any(ch in keyword for ch in {" ", "-", "/"}):
+            return keyword in text
+        return re.search(rf"\b{re.escape(keyword)}\b", text) is not None
     for keywords, columns in mapping:
-        if any(keyword in text for keyword in keywords):
+        if any(_contains_keyword(keyword) for keyword in keywords):
             for column in columns:
                 _ensure_plan_column(plan, column)
+
+    if config.key == "profiles":
+        if any(keyword in text for keyword in {"where ", "where is", "located", "location", "office", "offices", "hq", "headquarter"}):
+            for column in ["address", "city", "state", "zip", "country"]:
+                _ensure_plan_column(plan, column)
+        if any(keyword in text for keyword in {"phone", "contact", "call", "reach"}):
+            _ensure_plan_column(plan, "phone")
+        if any(keyword in text for keyword in {"identifier", "cik", "isin", "cusip"}):
+            for column in ["cik", "isin", "cusip"]:
+                _ensure_plan_column(plan, column)
+        if "status" in text or "active" in text:
+            for column in ["isActivelyTrading", "isEtf", "isAdr", "isFund"]:
+                _ensure_plan_column(plan, column)
+
+    elif config.key == "earnings":
+        if any(keyword in text for keyword in {"when", "next", "upcoming", "date", "schedule", "time"}):
+            for column in ["event_date", "time_hint", "period"]:
+                _ensure_plan_column(plan, column)
+        if "guidance" in text:
+            for column in ["guidanceEPS", "guidanceRevenue"]:
+                _ensure_plan_column(plan, column)
+        if any(keyword in text for keyword in {"eps", "estimate", "forecast"}):
+            for column in ["eps", "epsEstimated", "consensusEPS"]:
+                _ensure_plan_column(plan, column)
+        if "revenue" in text or "sales" in text:
+            for column in ["revenue", "revenueEstimated", "revenueEstimate"]:
+                _ensure_plan_column(plan, column)
+
+    elif config.key == "vendors":
+        if any(keyword in text for keyword in {"partner", "supplier", "customer", "client", "counterparty"}):
+            for column in ["counterparty_name", "counterparty_type", "relation_type"]:
+                _ensure_plan_column(plan, column)
+        if "value" in text or "contract" in text or "deal" in text:
+            _ensure_plan_column(plan, "est_contract_value_usd_m")
+        if "since" in text or "start" in text:
+            _ensure_plan_column(plan, "start_year")
+        if "strength" in text or "score" in text:
+            _ensure_plan_column(plan, "relationship_strength")
 
     # trim to reasonable sizes
     if len(plan.metrics) > 8:
@@ -985,6 +1045,19 @@ PROFILES_ALLOWED_COLUMNS: set[str] = {
     "city",
     "state",
     "zip",
+    "phone",
+    "cik",
+    "isin",
+    "cusip",
+    "image",
+    "range",
+    "defaultImage",
+    "isEtf",
+    "isActivelyTrading",
+    "isAdr",
+    "isFund",
+    "symbol_queried",
+    "symbol_original",
 }
 
 PROFILES_NUMERIC_COLUMNS: set[str] = {
@@ -1043,12 +1116,15 @@ EARNINGS_ALLOWED_COLUMNS: set[str] = {
     "time_hint",
     "period",
     "estimateEPS",
+    "epsEstimated",
     "consensusEPS",
     "eps",
+    "epsActual",
     "surprise",
     "surprisePercent",
     "revenue",
     "revenueEstimate",
+    "revenueEstimated",
     "fiscalDateEnding",
     "event_type",
     "eventStatus",
@@ -1058,12 +1134,15 @@ EARNINGS_ALLOWED_COLUMNS: set[str] = {
 
 EARNINGS_NUMERIC_COLUMNS: set[str] = {
     "estimateEPS",
+    "epsEstimated",
     "consensusEPS",
     "eps",
+    "epsActual",
     "surprise",
     "surprisePercent",
     "revenue",
     "revenueEstimate",
+    "revenueEstimated",
     "guidanceEPS",
     "guidanceRevenue",
 }
@@ -1072,10 +1151,13 @@ EARNINGS_PERCENT_COLUMNS: set[str] = {"surprisePercent"}
 EARNINGS_DATE_COLUMNS: set[str] = {"event_date", "fiscalDateEnding"}
 EARNINGS_CURRENCY_COLUMNS: set[str] = {
     "estimateEPS",
+    "epsEstimated",
     "consensusEPS",
     "eps",
+    "epsActual",
     "revenue",
     "revenueEstimate",
+    "revenueEstimated",
     "guidanceEPS",
     "guidanceRevenue",
 }
@@ -1107,6 +1189,8 @@ COLUMN_ALIASES: dict[str, str] = {
     "market_cap": "marketCap",
     "market capitalization": "marketCap",
     "marketcapitalization": "marketCap",
+    "company name": "companyName",
+    "ticker": "symbol",
     "share price": "price",
     "stock price": "price",
     "price per share": "price",
@@ -1115,11 +1199,20 @@ COLUMN_ALIASES: dict[str, str] = {
     "volume average": "averageVolume",
     "change percent": "changePercentage",
     "percent change": "changePercentage",
+    "percentage change": "changePercentage",
     "employees": "fullTimeEmployees",
     "headcount": "fullTimeEmployees",
+    "workforce": "fullTimeEmployees",
+    "employee count": "fullTimeEmployees",
+    "people": "fullTimeEmployees",
     "chief executive": "ceo",
     "ceo name": "ceo",
+    "chief executive officer": "ceo",
+    "leadership": "ceo",
     "exchange name": "exchangeFullName",
+    "listing": "exchangeFullName",
+    "listed exchange": "exchangeFullName",
+    "listing venue": "exchangeFullName",
     "overall score": "overall_score",
     "overallscore": "overall_score",
     "total score": "overall_score",
@@ -1129,13 +1222,101 @@ COLUMN_ALIASES: dict[str, str] = {
     "innovation score": "score_innovation",
     "macro score": "score_macro",
     "rank": "rank_overall",
-    "earnings per share": "estimateEPS",
-    "eps": "estimateEPS",
+    "earnings per share": "eps",
+    "reported eps": "eps",
+    "eps": "eps",
+    "eps estimate": "epsEstimated",
+    "estimated eps": "epsEstimated",
+    "eps forecast": "epsEstimated",
     "consensus eps": "consensusEPS",
     "guidance": "guidanceEPS",
+    "earnings guidance": "guidanceEPS",
     "revenue guidance": "guidanceRevenue",
+    "guidance revenue": "guidanceRevenue",
     "contract value": "est_contract_value_usd_m",
     "relationship strength": "relationship_strength",
+    "relationship score": "relationship_strength",
+    "relationship rating": "relationship_strength",
+    "location": "address",
+    "headquarters": "address",
+    "headquarter": "address",
+    "hq": "address",
+    "office": "address",
+    "offices": "address",
+    "corporate office": "address",
+    "main office": "address",
+    "primary location": "address",
+    "where located": "address",
+    "where is": "address",
+    "campus": "address",
+    "home base": "address",
+    "address line": "address",
+    "phone number": "phone",
+    "contact number": "phone",
+    "telephone": "phone",
+    "cik number": "cik",
+    "isin number": "isin",
+    "cusip number": "cusip",
+    "ipo": "ipoDate",
+    "ipo date": "ipoDate",
+    "ipo year": "ipoDate",
+    "ipo listing": "ipoDate",
+    "employees count": "fullTimeEmployees",
+    "staff count": "fullTimeEmployees",
+    "workforce size": "fullTimeEmployees",
+    "actives trading": "isActivelyTrading",
+    "actively traded": "isActivelyTrading",
+    "actively trading": "isActivelyTrading",
+    "adr": "isAdr",
+    "etf": "isEtf",
+    "fund": "isFund",
+    "image url": "image",
+    "logo": "image",
+    "picture": "image",
+    "symbol queried": "symbol_queried",
+    "symbol original": "symbol_original",
+    "revenue estimate": "revenueEstimated",
+    "estimated revenue": "revenueEstimated",
+    "revenue forecast": "revenueEstimated",
+    "eps estimated": "epsEstimated",
+    "sales": "revenue",
+    "top line": "revenue",
+    "deal size": "est_contract_value_usd_m",
+    "start year": "start_year",
+    "since": "start_year",
+    "session": "time_hint",
+    "time": "time_hint",
+    "pre-market": "time_hint",
+    "after hours": "time_hint",
+    "status": "eventStatus",
+    "event status": "eventStatus",
+    "event type": "event_type",
+    "call": "event_type",
+    "quarter": "period",
+    "fiscal period": "period",
+    "summary": "description",
+    "overview": "description",
+    "webpage": "website",
+    "link": "website",
+    "trading volume": "volume",
+    "avg trading volume": "averageVolume",
+    "day change": "change",
+    "price change": "change",
+    "trading range": "range",
+    "52 week range": "range",
+    "52w range": "range",
+    "volatility": "beta",
+    "payout": "lastDividend",
+    "value score": "score_valuation",
+    "quality score": "score_fundamentals",
+    "innovation": "score_innovation",
+    "macro": "score_macro",
+    "ranking": "rank_overall",
+    "position": "rank_overall",
+    "score date": "as_of",
+    "last updated": "as_of",
+    "comment": "notes",
+    "details": "notes",
 }
 
 PROFILES_LABELS: dict[str, str] = {
@@ -1164,6 +1345,19 @@ PROFILES_LABELS: dict[str, str] = {
     "city": "City",
     "state": "State",
     "zip": "ZIP",
+    "phone": "Phone",
+    "cik": "CIK",
+    "isin": "ISIN",
+    "cusip": "CUSIP",
+    "image": "Logo",
+    "range": "52W Range",
+    "defaultImage": "Default Image",
+    "isEtf": "ETF?",
+    "isActivelyTrading": "Actively Trading",
+    "isAdr": "ADR?",
+    "isFund": "Fund?",
+    "symbol_queried": "Symbol Queried",
+    "symbol_original": "Symbol Original",
 }
 
 SCORES_LABELS: dict[str, str] = {
@@ -1189,12 +1383,15 @@ EARNINGS_LABELS: dict[str, str] = {
     "time_hint": "Session",
     "period": "Period",
     "estimateEPS": "Est. EPS",
+    "epsEstimated": "Est. EPS",
     "consensusEPS": "Consensus EPS",
     "eps": "Reported EPS",
+    "epsActual": "Actual EPS",
     "surprise": "Surprise",
     "surprisePercent": "Surprise %",
     "revenue": "Revenue",
     "revenueEstimate": "Revenue Est.",
+    "revenueEstimated": "Revenue Est.",
     "fiscalDateEnding": "Fiscal Date",
     "event_type": "Event Type",
     "eventStatus": "Status",
@@ -1301,6 +1498,7 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         display_labels=PROFILES_LABELS,
         ticker_column="symbol",
         query_mode="sql",
+        max_columns=18,
     ),
     "scores": DatasetConfig(
         key="scores",
@@ -1326,7 +1524,7 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         percent_columns=EARNINGS_PERCENT_COLUMNS,
         date_columns=EARNINGS_DATE_COLUMNS,
         currency_columns=EARNINGS_CURRENCY_COLUMNS,
-        default_metrics=["event_date", "estimateEPS"],
+        default_metrics=["event_date", "epsEstimated"],
         default_include=["period", "time_hint"],
         base_columns=["symbol", "company_name", "event_date"],
         display_labels=EARNINGS_LABELS,
@@ -1356,62 +1554,100 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
 
 PROMPT_COLUMN_KEYWORDS: dict[str, list[tuple[tuple[str, ...], list[str]]]] = {
     "profiles": [
-        (("market cap", "marketcap", "capitalization"), ["marketCap"]),
-        (("price", "share price", "stock price"), ["price"]),
-        (("dividend",), ["lastDividend"]),
-        (("beta",), ["beta"]),
-        (("volume",), ["volume"]),
-        (("average volume", "avg volume"), ["averageVolume"]),
-        (("percent change", "change percent", "change%"), ["changePercentage"]),
-        (("change",), ["change"]),
-        (("employees", "headcount", "staff", "workforce"), ["fullTimeEmployees"]),
-        (("ceo", "chief executive"), ["ceo"]),
-        (("website", "site", "url"), ["website"]),
-        (("description", "summary", "profile", "about"), ["description"]),
-        (("address", "headquarters", "headquarter", "headquartered", "hq"), ["address", "city", "state", "zip", "country"]),
-        (("city",), ["city"]),
-        (("state",), ["state"]),
-        (("country",), ["country"]),
-        (("phone", "contact", "telephone", "contact number", "phone number"), ["phone"]),
-        (("exchange",), ["exchangeFullName", "exchange"]),
-        (("ipo", "listing", "went public"), ["ipoDate"]),
-        (("currency",), ["currency"]),
-        (("sector",), ["sector"]),
-        (("industry",), ["industry"]),
-        (("range",), ["range"]),
+        (("market cap", "marketcap", "capitalization", "market capitalization", "company value"), ["marketCap"]),
+        (("price", "share price", "stock price", "trading price", "current price"), ["price"]),
+        (("dividend", "payout"), ["lastDividend"]),
+        (("beta", "volatility"), ["beta"]),
+        (("volume", "trading volume"), ["volume"]),
+        (("average volume", "avg volume", "avg trading volume"), ["averageVolume"]),
+        (("percent change", "change percent", "change%", "percentage change"), ["changePercentage"]),
+        (("change", "price change", "day change"), ["change"]),
+        (("range", "52 week range", "52w range", "trading range"), ["range"]),
+        (("employees", "headcount", "staff", "workforce", "employee count", "people"), ["fullTimeEmployees"]),
+        (("ceo", "chief executive", "chief executive officer", "leadership", "ceo name"), ["ceo"]),
+        (("website", "site", "url", "webpage", "link"), ["website"]),
+        (("description", "summary", "profile", "about", "overview"), ["description"]),
+        ((
+            "address",
+            "headquarters",
+            "headquarter",
+            "headquartered",
+            "hq",
+            "office",
+            "offices",
+            "corporate office",
+            "main office",
+            "location",
+            "located",
+            "where located",
+            "where is",
+            "campus",
+            "base of operations",
+            "home base",
+            "primary location",
+        ), ["address", "city", "state", "zip", "country"]),
+        (("city", "town"), ["city"]),
+        (("state", "province", "region"), ["state"]),
+        (("country", "nation"), ["country"]),
+        (("phone", "contact", "telephone", "contact number", "phone number", "call"), ["phone"]),
+        (("exchange", "listing", "listed exchange", "trading venue", "stock exchange"), ["exchangeFullName", "exchange"]),
+        (("ipo", "listing", "went public", "ipo date", "ipo year"), ["ipoDate"]),
+        (("currency", "denominated"), ["currency"]),
+        (("sector", "business sector"), ["sector"]),
+        (("industry", "business line"), ["industry"]),
+        (("cik", "cik number", "sec id", "sec identifier"), ["cik"]),
+        (("isin", "isin code", "international securities identification"), ["isin"]),
+        (("cusip", "cusip code"), ["cusip"]),
+        (("logo", "image", "picture", "brand mark", "brand logo"), ["image"]),
+        (("default image", "placeholder image"), ["defaultImage"]),
+        (("actively trading", "trading status", "status", "active listing"), ["isActivelyTrading"]),
+        (("etf", "exchange traded fund"), ["isEtf"]),
+        (("adr", "american depositary"), ["isAdr"]),
+        (("fund", "mutual fund"), ["isFund"]),
+        (("symbol queried", "input symbol", "search symbol"), ["symbol_queried"]),
+        (("symbol original", "original symbol", "primary ticker"), ["symbol_original"]),
     ],
     "scores": [
-        (("overall score", "score"), ["overall_score"]),
-        (("valuation score",), ["score_valuation"]),
-        (("fundamental score", "fundamentals"), ["score_fundamentals"]),
-        (("sentiment score",), ["score_sentiment"]),
-        (("innovation score",), ["score_innovation"]),
-        (("macro score",), ["score_macro"]),
-        (("price",), ["px"]),
-        (("ev/ebitda", "ev ebitda"), ["ev_ebitda"]),
-        (("rank",), ["rank_overall"]),
+        (("overall score", "overall rating", "score"), ["overall_score"]),
+        (("valuation score", "value score", "valuation"), ["score_valuation"]),
+        (("fundamental score", "fundamentals", "quality score"), ["score_fundamentals"]),
+        (("sentiment score", "sentiment"), ["score_sentiment"]),
+        (("innovation score", "innovation"), ["score_innovation"]),
+        (("macro score", "macro"), ["score_macro"]),
+        (("price", "share price"), ["px"]),
+        (("ev/ebitda", "ev ebitda", "enterprise multiple"), ["ev_ebitda"]),
+        (("rank", "ranking", "position"), ["rank_overall"]),
+        (("as of", "score date", "last updated"), ["as_of"]),
+        (("sector", "score sector"), ["sector"]),
+        (("industry", "score industry"), ["industry"]),
     ],
     "earnings": [
-        (("estimate", "estimated eps"), ["estimateEPS"]),
-        (("consensus",), ["consensusEPS"]),
-        (("reported eps", "eps"), ["eps"]),
-        (("surprise",), ["surprise", "surprisePercent"]),
-        (("revenue",), ["revenue", "revenueEstimate"]),
-        (("guidance",), ["guidanceEPS", "guidanceRevenue"]),
-        (("period",), ["period"]),
-        (("event date", "date", "earnings date", "report date"), ["event_date", "time_hint"]),
-        (("fiscal",), ["fiscalDateEnding"]),
+        (("estimate", "estimated eps", "eps estimate", "eps forecast"), ["epsEstimated", "estimateEPS"]),
+        (("consensus", "consensus eps"), ["consensusEPS"]),
+        (("reported eps", "actual eps", "eps reported"), ["eps", "epsActual"]),
+        (("surprise", "beat", "miss"), ["surprise", "surprisePercent"]),
+        (("revenue", "sales", "top line"), ["revenue", "revenueEstimate", "revenueEstimated"]),
+        (("guidance", "guidance eps", "guidance revenue"), ["guidanceEPS", "guidanceRevenue"]),
+        (("period", "quarter", "fiscal period"), ["period"]),
+        (("event date", "date", "earnings date", "report date", "next earnings", "upcoming earnings", "when"), ["event_date", "time_hint"]),
+        (("time", "time slot", "session", "pre-market", "after hours"), ["time_hint"]),
+        (("fiscal", "fiscal date", "fiscal quarter"), ["fiscalDateEnding"]),
+        (("status", "event status"), ["eventStatus"]),
+        (("type", "event type", "call"), ["event_type"]),
     ],
     "vendors": [
-        (("relation", "relationship"), ["relation_type", "relationship_strength"]),
-        (("customer", "customers"), ["counterparty_name", "counterparty_type"]),
-        (("supplier", "suppliers", "vendor", "vendors", "partner", "partners"), ["counterparty_name", "counterparty_type"]),
-        (("contract", "deal", "value"), ["est_contract_value_usd_m"]),
-        (("region", "geo"), ["region"]),
-        (("tier",), ["tier"]),
-        (("category",), ["category"]),
-        (("component", "product"), ["component_or_product"]),
-        (("notes",), ["notes"]),
+        (("relation", "relationship", "relationship type"), ["relation_type", "relationship_strength"]),
+        (("relationship strength", "relationship score", "strength"), ["relationship_strength"]),
+        (("customer", "customers", "client", "clients", "buyer", "buyers"), ["counterparty_name", "counterparty_type"]),
+        (("supplier", "suppliers", "vendor", "vendors", "partner", "partners", "counterparty", "counterparties", "ecosystem"), ["counterparty_name", "counterparty_type"]),
+        (("contract", "deal", "value", "contract value", "deal size"), ["est_contract_value_usd_m"]),
+        (("region", "geo", "geography", "location"), ["region"]),
+        (("tier", "tiering"), ["tier"]),
+        (("category", "segment", "classification"), ["category"]),
+        (("component", "product", "solution", "offering"), ["component_or_product"]),
+        (("start year", "since", "relationship start"), ["start_year"]),
+        (("notes", "comment", "details"), ["notes"]),
+        (("dummy", "placeholder", "sample"), ["is_dummy"]),
     ],
 }
 
@@ -1511,20 +1747,25 @@ class ChatPlan:
             if ticker not in clean_tickers and len(clean_tickers) < 8:
                 clean_tickers.append(ticker)
         self.tickers = clean_tickers
+        if self.intent == "compare" and len(self.tickers) < 2:
+            self.intent = "lookup"
+            self.needs_chart = False
 
         # Metrics & include columns
-        def _clean_columns(items: list[str]) -> list[str]:
+        def _clean_columns(items: list[str], limit: int) -> list[str]:
             seen: list[str] = []
             for item in items:
                 col = self.config.normalize_column(item)
                 if col and col not in seen and col in self.config.allowed_columns:
                     seen.append(col)
-                if len(seen) >= 6:
+                if len(seen) >= limit:
                     break
             return seen
 
-        self.metrics = _clean_columns(self.metrics)
-        self.include = _clean_columns(self.include)
+        metric_limit = max(2, min(6, self.config.max_columns))
+        include_limit = max(4, self.config.max_columns)
+        self.metrics = _clean_columns(self.metrics, metric_limit)
+        self.include = _clean_columns(self.include, include_limit)
 
         if not self.metrics and self.intent != "chitchat":
             self.metrics = list(self.config.default_metrics)
@@ -1759,12 +2000,13 @@ def _heuristic_plan_data(prompt: str) -> dict[str, Any]:
             ensure(metrics, "score_macro")
         include = ["sector", "industry"]
     elif dataset == "earnings":
-        metrics = ["estimateEPS", "consensusEPS"]
+        metrics = ["epsEstimated", "consensusEPS"]
         if "surprise" in text:
             ensure(metrics, "surprisePercent")
         if "revenue" in text:
             ensure(metrics, "revenue")
             ensure(metrics, "revenueEstimate")
+            ensure(metrics, "revenueEstimated")
         if "guidance" in text:
             ensure(metrics, "guidanceEPS")
             ensure(metrics, "guidanceRevenue")
