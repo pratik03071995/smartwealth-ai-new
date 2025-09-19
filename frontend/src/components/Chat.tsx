@@ -85,11 +85,15 @@ type ChartPayload =
 
 type AssistantMsg = {
   role: 'assistant'
+  id?: string
   text: string
   table?: TablePayload
   chart?: ChartPayload | null
   sql?: string | null
   latencyMs?: number
+  prompt?: string
+  feedback?: 'up' | 'down' | null
+  plan?: Record<string, unknown> | null
 }
 
 type UserMsg = { role: 'user'; text: string }
@@ -156,9 +160,23 @@ function formatLatency(raw: number | undefined) {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`
 }
 
+function createMessageId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    try {
+      return crypto.randomUUID()
+    } catch (_) {
+      // fall through to fallback id
+    }
+  }
+  return `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`
+}
+
 const INITIAL_ASSISTANT: AssistantMsg = {
   role: 'assistant',
   text: 'Hi! Ask me about company fundamentals, earnings, scores, or vendor relationships. Try “Where is Meta headquartered?” or “Who are Nvidia’s customers?”.',
+  id: 'welcome',
+  feedback: null,
+  plan: null,
 }
 
 export default function Chat() {
@@ -169,9 +187,11 @@ export default function Chat() {
   const [graphOpen, setGraphOpen] = useState(false)
   const [graphReady, setGraphReady] = useState(false)
   const [pendingLatencyMs, setPendingLatencyMs] = useState(0)
+  const [feedbackLoading, setFeedbackLoading] = useState<Record<string, boolean>>({})
   const endRef = useRef<HTMLDivElement | null>(null)
   const pendingTimerRef = useRef<number | null>(null)
   const pendingStartRef = useRef<number | null>(null)
+  const lastPromptRef = useRef('')
   const chartHighlights = useMemo(() => {
     if (!chartSpec) return null
     if (chartSpec.type === 'bar') {
@@ -271,6 +291,77 @@ export default function Chat() {
     )
   }
 
+  async function submitFeedback(msg: AssistantMsg, rating: 'up' | 'down') {
+    if (!msg.id) return
+    if (msg.feedback && msg.feedback === rating) return
+    setFeedbackLoading((prev) => ({ ...prev, [msg.id!]: true }))
+
+    const payload = {
+      messageId: msg.id,
+      rating,
+      prompt: msg.prompt,
+      answer: msg.text,
+      sql: msg.sql,
+      plan: msg.plan,
+      table: msg.table,
+      chart: msg.chart,
+      latencyMs: msg.latencyMs,
+      dataset: (msg.plan as any)?.dataset ?? undefined,
+      createdAt: new Date().toISOString(),
+    }
+
+    try {
+      await axios.post(`${API_BASE}/chat/feedback`, payload)
+      setMessages((prev) =>
+        prev.map((entry) =>
+          isAssistant(entry) && entry.id === msg.id
+            ? { ...entry, feedback: rating }
+            : entry,
+        ),
+      )
+    } catch (error) {
+      console.error('Failed to submit feedback', error)
+    } finally {
+      setFeedbackLoading((prev) => {
+        const next = { ...prev }
+        delete next[msg.id!]
+        return next
+      })
+    }
+  }
+
+  function renderFeedbackControls(msg: AssistantMsg) {
+    if (!msg.id) return null
+    const busy = !!feedbackLoading[msg.id]
+    const selected = msg.feedback ?? null
+    return (
+      <div className="mt-2 flex items-center gap-2 text-[10px] uppercase tracking-widest text-[var(--muted)]">
+        <span>Helpful?</span>
+        <button
+          type="button"
+          disabled={busy || selected === 'up'}
+          onClick={() => submitFeedback(msg, 'up')}
+          className={`rounded-full border border-[var(--border)] px-2.5 py-1 transition hover:opacity-80 ${
+            selected === 'up' ? 'bg-[var(--brand2)]/20 text-[var(--brand2)]' : 'bg-[var(--panel)]'
+          } ${busy ? 'opacity-50' : ''}`}
+        >
+          👍
+        </button>
+        <button
+          type="button"
+          disabled={busy || selected === 'down'}
+          onClick={() => submitFeedback(msg, 'down')}
+          className={`rounded-full border border-[var(--border)] px-2.5 py-1 transition hover:opacity-80 ${
+            selected === 'down' ? 'bg-red-500/20 text-red-400' : 'bg-[var(--panel)]'
+          } ${busy ? 'opacity-50' : ''}`}
+        >
+          👎
+        </button>
+        {selected ? <span className="text-[var(--brand2)]">Thanks!</span> : null}
+      </div>
+    )
+  }
+
   function handleOpenChart(spec: ChartPayload) {
     setChartSpec(spec)
     setGraphOpen(true)
@@ -282,6 +373,7 @@ export default function Chat() {
     setMessages([INITIAL_ASSISTANT])
     setChartSpec(null)
     setGraphOpen(false)
+    setFeedbackLoading({})
   }
 
   async function send() {
@@ -291,12 +383,14 @@ export default function Chat() {
     setInput('')
     setIsLoading(true)
     setMessages((m) => [...m, { role: 'user', text }])
+    lastPromptRef.current = text
     const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
 
     try {
       const { data } = await axios.post(`${API_BASE}/chat`, { message: text })
       const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       const latencyMs = Math.max(0, endedAt - startedAt)
+      const assistantId = (data?.messageId as string) || createMessageId()
       const assistant: AssistantMsg = {
         role: 'assistant',
         text: data?.reply || 'I could not craft a response for that.',
@@ -304,10 +398,24 @@ export default function Chat() {
         chart: data?.chart,
         sql: data?.sql,
         latencyMs,
+        id: assistantId,
+        prompt: lastPromptRef.current,
+        feedback: null,
+        plan: data?.plan ?? null,
       }
       setMessages((m) => [...m, assistant])
     } catch (err) {
-      setMessages((m) => [...m, { role: 'assistant', text: 'Error reaching API.' }])
+      const assistantId = createMessageId()
+      const fallback: AssistantMsg = {
+        role: 'assistant',
+        text: 'Error reaching API.',
+        latencyMs: 0,
+        id: assistantId,
+        prompt: lastPromptRef.current,
+        feedback: null,
+        plan: null,
+      }
+      setMessages((m) => [...m, fallback])
     } finally {
       setIsLoading(false)
     }
@@ -382,6 +490,7 @@ export default function Chat() {
                     </pre>
                   </details>
                 ) : null}
+                {isAssistant(m) && m.id !== 'welcome' ? renderFeedbackControls(m) : null}
               </div>
             </motion.div>
           ))}

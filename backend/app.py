@@ -1,11 +1,12 @@
 # app.py
 from __future__ import annotations
 
-import json, logging, math, os, re
+import json, logging, math, os, re, threading, uuid
 from typing import List, Dict, Any, Tuple, Literal, Optional
 from datetime import datetime, timedelta, date
 from contextlib import contextmanager
 from decimal import Decimal
+from difflib import SequenceMatcher
 
 import requests
 from flask import Flask, jsonify, request
@@ -43,6 +44,11 @@ EARNINGS_TABLE  = "workspace.sw_gold.earnings_calendar_new"
 VENDOR_TABLE    = "workspace.sw_gold.vendor_customer_network"
 SCORES_TABLE    = os.getenv("SCORES_TABLE", "workspace.sw_gold.scores")
 PROFILES_TABLE  = os.getenv("PROFILES_TABLE", "workspace.sw_gold.nyse_profiles")
+CHAT_FEEDBACK_TABLE = os.getenv("CHAT_FEEDBACK_TABLE", "workspace.sw_gold.chat_feedback_log")
+
+CHAT_FEEDBACK_STATUS_APPROVED = "approved"
+CHAT_FEEDBACK_STATUS_PENDING = "pending"
+CHAT_FEEDBACK_STATUS_REJECTED = "rejected"
 
 # ======== LLM config ========
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -93,6 +99,11 @@ SCORES_CACHE_LIMIT = int(os.getenv("SCORES_CACHE_LIMIT", "200"))
 PROFILES_CACHE_TTL = int(os.getenv("PROFILES_CACHE_TTL", "900"))    # 15 min
 PROFILES_CACHE_LIMIT = int(os.getenv("PROFILES_CACHE_LIMIT", "5000"))
 
+FEEDBACK_LOG_PATH = os.getenv("CHAT_FEEDBACK_PATH", os.path.join(BASE_DIR, "chat_feedback.jsonl"))
+
+_FEEDBACK_CACHE: list[dict[str, Any]] = []
+_FEEDBACK_LOCK = threading.Lock()
+
 # ---------------- helpers ----------------
 def _require_dbsql():
     if not dbsql:
@@ -115,10 +126,48 @@ def _db_cursor():
         cur = conn.cursor()
         try:
             yield cur
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             cur.close()
     finally:
         conn.close()
+
+
+def _ensure_feedback_tables() -> None:
+    if not dbsql or not CHAT_FEEDBACK_TABLE:
+        return
+    try:
+        with _db_cursor() as c:
+            c.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {CHAT_FEEDBACK_TABLE} (
+                    message_id STRING,
+                    prompt STRING,
+                    normalized_prompt STRING,
+                    tokens ARRAY<STRING>,
+                    answer STRING,
+                    dataset STRING,
+                    plan_json STRING,
+                    table_json STRING,
+                    chart_json STRING,
+                    sql STRING,
+                    latency_ms DOUBLE,
+                    status STRING,
+                    rating STRING,
+                    created_at TIMESTAMP,
+                    updated_at TIMESTAMP,
+                    source_message_id STRING,
+                    match_score DOUBLE
+                )
+                USING DELTA
+                TBLPROPERTIES (delta.autoOptimize.optimizeWrite = true, delta.autoOptimize.autoCompact = true)
+                """
+            )
+    except Exception as exc:
+        logger.error("Failed to ensure feedback tables exist: %s", exc)
 
 def _first_key(d: dict, keys: list[str], default=None):
     for k in keys:
@@ -262,6 +311,334 @@ _PROFILES_CACHE = {"rows": None, "ts": None}
 _MOCK_DATA_CACHE: dict[str, Optional[list[dict[str, Any]]]] = {}
 _PROFILE_NAME_INDEX: Optional[dict[str, set[str]]] = None
 _PROFILE_NAME_INDEX_TS: Optional[datetime] = None
+
+
+def _normalize_feedback_prompt(prompt: str) -> tuple[str, set[str]]:
+    tokens = re.findall(r"[a-z0-9]+", (prompt or "").lower())
+    normalized = " ".join(tokens)
+    return normalized, set(tokens)
+
+
+def _feedback_cache_entry(raw: dict[str, Any]) -> Optional[dict[str, Any]]:
+    prompt = raw.get("prompt") or ""
+    normalized = raw.get("normalized_prompt") or None
+    tokens_list = raw.get("tokens")
+    if not normalized or not tokens_list:
+        normalized, tokens = _normalize_feedback_prompt(prompt)
+    else:
+        tokens = set(tokens_list)
+    plan_json = raw.get("plan_json")
+    table_json = raw.get("table_json")
+    chart_json = raw.get("chart_json")
+    plan_value = raw.get("plan")
+    table_value = raw.get("table")
+    chart_value = raw.get("chart")
+    if plan_value is None and isinstance(plan_json, str):
+        try:
+            plan_value = json.loads(plan_json)
+        except Exception:
+            plan_value = None
+    if table_value is None and isinstance(table_json, str):
+        try:
+            table_value = json.loads(table_json)
+        except Exception:
+            table_value = None
+    if chart_value is None and isinstance(chart_json, str):
+        try:
+            chart_value = json.loads(chart_json)
+        except Exception:
+            chart_value = None
+    entry = {
+        "messageId": raw.get("messageId") or raw.get("id") or str(uuid.uuid4()),
+        "prompt": prompt,
+        "normalized_prompt": normalized,
+        "tokens": tokens,
+        "answer": raw.get("answer") or raw.get("reply") or "",
+        "rating": (raw.get("rating") or "").lower(),
+        "table": table_value,
+        "chart": chart_value,
+        "plan": plan_value,
+        "sql": raw.get("sql") or raw.get("sql_raw"),
+        "latencyMs": raw.get("latencyMs"),
+        "createdAt": raw.get("createdAt") or raw.get("created_at") or datetime.utcnow().isoformat(),
+        "status": raw.get("status") or CHAT_FEEDBACK_STATUS_PENDING,
+        "dataset": raw.get("dataset"),
+        "source_message_id": raw.get("source_message_id"),
+        "match_score": raw.get("match_score"),
+    }
+    if not entry["prompt"]:
+        return None
+    return entry
+
+
+def _load_feedback_cache() -> None:
+    global _FEEDBACK_CACHE
+    loaded: list[dict[str, Any]] = []
+
+    if dbsql and CHAT_FEEDBACK_TABLE:
+        try:
+            _ensure_feedback_tables()
+            with _db_cursor() as c:
+                c.execute(
+                    f"""
+                    SELECT message_id, prompt, normalized_prompt, tokens, answer, dataset, plan_json, table_json, chart_json,
+                           sql, latency_ms, status, rating, created_at, source_message_id, match_score
+                    FROM {CHAT_FEEDBACK_TABLE}
+                    WHERE status IN ('{CHAT_FEEDBACK_STATUS_APPROVED}', '{CHAT_FEEDBACK_STATUS_PENDING}')
+                    """
+                )
+                cols = [d[0] for d in c.description]
+                rows = [dict(zip(cols, r)) for r in c.fetchall()]
+            for row in rows:
+                entry = _feedback_cache_entry(row)
+                if entry:
+                    entry["tokens"] = set(row.get("tokens") or entry["tokens"] or set())
+                    loaded.append(entry)
+        except Exception as exc:
+            logger.error("Failed to load feedback cache from Databricks: %s", exc)
+            loaded = []
+
+    if not loaded and FEEDBACK_LOG_PATH and os.path.exists(FEEDBACK_LOG_PATH):
+        try:
+            with open(FEEDBACK_LOG_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    entry = _feedback_cache_entry(data)
+                    if entry:
+                        loaded.append(entry)
+        except Exception as exc:
+            logger.error("Failed to load feedback cache from file: %s", exc)
+
+    _FEEDBACK_CACHE = [e for e in loaded if e.get("status") in {CHAT_FEEDBACK_STATUS_APPROVED, CHAT_FEEDBACK_STATUS_PENDING}]
+
+
+def _record_feedback(raw_entry: dict[str, Any]) -> None:
+    global _FEEDBACK_CACHE
+    entry = _feedback_cache_entry(raw_entry)
+    if not entry:
+        raise ValueError("Invalid feedback entry")
+
+    normalized, tokens = _normalize_feedback_prompt(entry["prompt"])
+    entry["normalized_prompt"] = normalized
+    entry["tokens"] = tokens
+
+    rating_value = entry.get("rating") if entry.get("rating") else None
+    if rating_value not in {"up", "down"}:
+        rating_value = None
+
+    status = entry.get("status") or CHAT_FEEDBACK_STATUS_PENDING
+    if rating_value == "up":
+        status = CHAT_FEEDBACK_STATUS_APPROVED
+    elif rating_value == "down":
+        status = CHAT_FEEDBACK_STATUS_REJECTED
+    entry["status"] = status
+
+    stored = dict(entry)
+    stored["tokens"] = list(tokens)
+
+    with _FEEDBACK_LOCK:
+        if FEEDBACK_LOG_PATH:
+            directory = os.path.dirname(FEEDBACK_LOG_PATH)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            with open(FEEDBACK_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(stored, ensure_ascii=False) + "\n")
+
+        tokens_list = list(tokens)
+        plan_json = json.dumps(entry.get("plan"), ensure_ascii=False) if entry.get("plan") is not None else None
+        table_json = json.dumps(entry.get("table"), ensure_ascii=False) if entry.get("table") is not None else None
+        chart_json = json.dumps(entry.get("chart"), ensure_ascii=False) if entry.get("chart") is not None else None
+        dataset = entry.get("dataset")
+        latency_ms = entry.get("latencyMs")
+        source_message_id = entry.get("source_message_id")
+        match_score = entry.get("match_score")
+
+        if dbsql and CHAT_FEEDBACK_TABLE:
+            try:
+                _ensure_feedback_tables()
+                with _db_cursor() as c:
+                    update_sql = f"""
+                        UPDATE {CHAT_FEEDBACK_TABLE}
+                        SET prompt = ?, normalized_prompt = ?, tokens = ?, answer = ?, dataset = ?,
+                            plan_json = ?, table_json = ?, chart_json = ?, sql = ?, latency_ms = ?,
+                            status = ?, rating = ?, updated_at = current_timestamp(),
+                            source_message_id = ?, match_score = ?
+                        WHERE message_id = ?
+                    """
+                    update_params = (
+                        entry["prompt"],
+                        normalized,
+                        tokens_list,
+                        entry.get("answer"),
+                        dataset,
+                        plan_json,
+                        table_json,
+                        chart_json,
+                        entry.get("sql"),
+                        latency_ms,
+                        status,
+                        rating_value,
+                        source_message_id,
+                        match_score,
+                        entry["messageId"],
+                    )
+                    c.execute(update_sql, update_params)
+                    updated = getattr(c, "rowcount", 0)
+                    if updated is None or updated <= 0:
+                        insert_sql = f"""
+                            INSERT INTO {CHAT_FEEDBACK_TABLE}
+                            (message_id, prompt, normalized_prompt, tokens, answer, dataset, plan_json, table_json, chart_json,
+                             sql, latency_ms, status, rating, created_at, updated_at, source_message_id, match_score)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, current_timestamp()), current_timestamp(), ?, ?)
+                        """
+                        insert_params = (
+                            entry["messageId"],
+                            entry["prompt"],
+                            normalized,
+                            tokens_list,
+                            entry.get("answer"),
+                            dataset,
+                            plan_json,
+                            table_json,
+                            chart_json,
+                            entry.get("sql"),
+                            latency_ms,
+                            status,
+                            rating_value,
+                            entry.get("createdAt"),
+                            source_message_id,
+                            match_score,
+                        )
+                        c.execute(insert_sql, insert_params)
+            except Exception as exc:
+                logger.error("Failed to sync feedback entry to Databricks: %s", exc)
+
+        if status == CHAT_FEEDBACK_STATUS_REJECTED:
+            _FEEDBACK_CACHE = [e for e in _FEEDBACK_CACHE if e.get("messageId") != entry.get("messageId")]
+        elif status in {CHAT_FEEDBACK_STATUS_APPROVED, CHAT_FEEDBACK_STATUS_PENDING}:
+            _FEEDBACK_CACHE = [e for e in _FEEDBACK_CACHE if e.get("messageId") != entry.get("messageId")]
+            _FEEDBACK_CACHE.append(entry)
+
+
+def _best_feedback_match(prompt: str) -> tuple[Optional[dict[str, Any]], float]:
+    if not prompt:
+        return None, 0.0
+    normalized, tokens = _normalize_feedback_prompt(prompt)
+    best_entry: Optional[dict[str, Any]] = None
+    best_score = 0.0
+    for entry in _FEEDBACK_CACHE:
+        status = entry.get("status")
+        if status not in {CHAT_FEEDBACK_STATUS_APPROVED, CHAT_FEEDBACK_STATUS_PENDING}:
+            continue
+        shared_tokens = len(tokens & entry.get("tokens", set()))
+        token_overlap = shared_tokens / max(1, len(tokens))
+        ratio = SequenceMatcher(None, normalized, entry.get("normalized_prompt", "")).ratio()
+        score = (ratio * 0.7) + (token_overlap * 0.3)
+        if status == CHAT_FEEDBACK_STATUS_APPROVED:
+            score += 0.05
+        if score > best_score and (ratio >= 0.75 or token_overlap >= 0.6):
+            best_score = score
+            best_entry = entry
+    return best_entry, best_score
+
+
+def _feedback_response(entry: dict[str, Any]) -> dict[str, Any]:
+    answer = entry.get("answer") or "Based on previously confirmed feedback, here is the answer I have saved."
+    response: dict[str, Any] = {
+        "reply": answer,
+        "sql": entry.get("sql"),
+        "sql_raw": entry.get("sql"),
+        "plan": entry.get("plan"),
+        "table": entry.get("table"),
+        "chart": entry.get("chart"),
+        "feedback_source": {
+            "messageId": entry.get("messageId"),
+            "prompt": entry.get("prompt"),
+            "rating": entry.get("rating"),
+            "createdAt": entry.get("createdAt"),
+        },
+    }
+    return response
+
+
+def _log_chat_interaction(
+    *,
+    message_id: str,
+    prompt: str,
+    answer: str,
+    plan: Optional[dict[str, Any]],
+    dataset: Optional[str],
+    table_payload: Optional[dict[str, Any]],
+    chart_payload: Optional[dict[str, Any]],
+    sql: Optional[str],
+    latency_ms: Optional[float],
+    status: str = CHAT_FEEDBACK_STATUS_PENDING,
+    source_message_id: Optional[str] = None,
+    match_score: Optional[float] = None,
+) -> None:
+    entry = {
+        "messageId": message_id,
+        "prompt": prompt,
+        "answer": answer,
+        "plan": plan,
+        "dataset": dataset,
+        "table": table_payload,
+        "chart": chart_payload,
+        "sql": sql,
+        "latencyMs": latency_ms,
+        "rating": "",
+        "status": status,
+        "createdAt": datetime.utcnow().isoformat(),
+        "source_message_id": source_message_id,
+        "match_score": match_score,
+    }
+    try:
+        _record_feedback(entry)
+    except Exception as exc:
+        logger.error("Failed to record chat interaction: %s", exc)
+
+
+def _fetch_feedback_entry_by_id(message_id: str) -> Optional[dict[str, Any]]:
+    if not message_id:
+        return None
+    for entry in _FEEDBACK_CACHE:
+        if entry.get("messageId") == message_id:
+            return entry
+    if not (dbsql and CHAT_FEEDBACK_TABLE):
+        return None
+    try:
+        _ensure_feedback_tables()
+        with _db_cursor() as c:
+            c.execute(
+                f"""
+                SELECT message_id, prompt, normalized_prompt, tokens, answer, dataset, plan_json, table_json, chart_json,
+                       sql, latency_ms, status, rating, created_at, source_message_id, match_score
+                FROM {CHAT_FEEDBACK_TABLE}
+                WHERE message_id = ?
+                """,
+                (message_id,),
+            )
+            row = c.fetchone()
+            if not row:
+                return None
+            cols = [d[0] for d in c.description]
+            data = dict(zip(cols, row))
+        entry = _feedback_cache_entry(data)
+        if entry:
+            entry["tokens"] = set(data.get("tokens") or entry.get("tokens") or set())
+        return entry
+    except Exception as exc:
+        logger.error("Failed to fetch feedback entry %s: %s", message_id, exc)
+        return None
+
+
+_load_feedback_cache()
 
 
 def _build_profile_name_index(force: bool = False) -> dict[str, set[str]]:
@@ -2602,6 +2979,7 @@ def _fallback_smalltalk(user_prompt: str) -> str:
 
 
 def handle_chat(user_prompt: str) -> dict[str, Any]:
+    feedback_entry, feedback_score = _best_feedback_match(user_prompt)
     plan_dict: Optional[dict[str, Any]] = None
     try:
         plan_resp = _llm_chat([
@@ -2629,28 +3007,91 @@ def handle_chat(user_prompt: str) -> dict[str, Any]:
 
     _augment_plan_with_prompt(plan, user_prompt)
 
+    message_id = str(uuid.uuid4())
+    plan_snapshot = plan.to_dict()
+
+    def finalize_response(
+        resp: dict[str, Any],
+        *,
+        status: str = CHAT_FEEDBACK_STATUS_PENDING,
+        table_payload: Optional[dict[str, Any]] = None,
+        chart_payload: Optional[dict[str, Any]] = None,
+        source_message_id: Optional[str] = None,
+        match_score: Optional[float] = None,
+    ) -> dict[str, Any]:
+        resp.setdefault("plan", plan_snapshot)
+        resp["messageId"] = resp.get("messageId") or message_id
+        table_data = table_payload if table_payload is not None else resp.get("table")
+        chart_data = chart_payload if chart_payload is not None else resp.get("chart")
+        sql_text = resp.get("sql") or resp.get("sql_raw")
+        latency_ms = resp.get("latencyMs")
+        _log_chat_interaction(
+            message_id=resp["messageId"],
+            prompt=user_prompt,
+            answer=resp.get("reply") or "",
+            plan=plan_snapshot,
+            dataset=plan.dataset,
+            table_payload=table_data,
+            chart_payload=chart_data,
+            sql=sql_text,
+            latency_ms=latency_ms,
+            status=status,
+            source_message_id=source_message_id,
+            match_score=match_score,
+        )
+        return resp
+
     if plan.intent == "chitchat" and not plan.metrics:
-        return {"reply": _fallback_smalltalk(user_prompt)}
+        response = {"reply": _fallback_smalltalk(user_prompt), "plan": plan_snapshot}
+        return finalize_response(response)
 
     try:
         rows, sql_raw, sql_params = _fetch_rows(plan)
     except Exception as exc:
         logger.error("Dataset fetch failed: %s", exc)
         if LLM_MODE != "mock" and plan.config.query_mode == "sql":
-            return {"reply": "I ran into an issue reaching Databricks. Please try again in a minute."}
-        return {"reply": "I couldn't retrieve data for that request just now."}
+            error_response = {"reply": "I ran into an issue reaching Databricks. Please try again in a minute."}
+            return finalize_response(error_response, status="error")
+        if feedback_entry:
+            fallback_entry = {**feedback_entry, "rating": "up"}
+            fallback = _feedback_response(fallback_entry)
+            fallback.setdefault("reply", "I couldn't retrieve live data, but here's the last verified answer I have saved.")
+            fallback["feedback_source"]["match_score"] = feedback_score
+            fallback.setdefault("plan", plan_snapshot)
+            return finalize_response(
+                fallback,
+                status=feedback_entry.get("status") or CHAT_FEEDBACK_STATUS_PENDING,
+                source_message_id=feedback_entry.get("messageId"),
+                match_score=feedback_score,
+            )
+        return finalize_response({"reply": "I couldn't retrieve data for that request just now."}, status="error")
 
     if not rows:
+        if feedback_entry:
+            fallback = _feedback_response(feedback_entry)
+            fallback["feedback_source"]["match_score"] = feedback_score
+            fallback.setdefault("plan", plan_snapshot)
+            if not fallback.get("sql"):
+                fallback["sql"] = _render_sql_with_params(sql_raw, sql_params)
+                fallback["sql_raw"] = sql_raw
+            return finalize_response(
+                fallback,
+                status=feedback_entry.get("status") or CHAT_FEEDBACK_STATUS_PENDING,
+                source_message_id=feedback_entry.get("messageId"),
+                match_score=feedback_score,
+            )
         no_data_msg = (
             f"I couldn't find matching records in the SmartWealth {plan.dataset} dataset. "
             "Try another ticker or adjust the filters."
         )
-        return {
-            "reply": no_data_msg,
-            "sql": _render_sql_with_params(sql_raw, sql_params),
-            "sql_raw": sql_raw,
-            "plan": plan.to_dict(),
-        }
+        return finalize_response(
+            {
+                "reply": no_data_msg,
+                "sql": _render_sql_with_params(sql_raw, sql_params),
+                "sql_raw": sql_raw,
+                "plan": plan_snapshot,
+            }
+        )
 
     table_payload = _build_table_payload(plan, rows)
     chart_payload = _build_chart_payload(plan, rows)
@@ -2661,13 +3102,23 @@ def handle_chat(user_prompt: str) -> dict[str, Any]:
         "reply": summary,
         "sql": display_sql,
         "sql_raw": sql_raw,
-        "plan": plan.to_dict(),
+        "plan": plan_snapshot,
     }
     if table_payload:
         response["table"] = table_payload
     if chart_payload:
         response["chart"] = chart_payload
-    return response
+    if feedback_entry:
+        response["feedback_reference"] = {
+            "prompt": feedback_entry.get("prompt"),
+            "createdAt": feedback_entry.get("createdAt"),
+            "match_score": feedback_score,
+        }
+    return finalize_response(
+        response,
+        table_payload=table_payload,
+        chart_payload=chart_payload,
+    )
 
 # ========================= Earnings API =========================
 @app.get("/api/earnings/week")
@@ -2839,6 +3290,72 @@ def chat():
         return jsonify({
             "reply": "I ran into an unexpected issue answering that. Please try again shortly.",
         }), 500
+
+
+@app.post("/api/chat/feedback")
+def chat_feedback():
+    data = request.get_json(silent=True) or {}
+    rating = str(data.get("rating") or "").lower()
+    if rating not in {"up", "down"}:
+        return jsonify({"error": "Invalid rating"}), 400
+
+    entry = {
+        "messageId": data.get("messageId") or str(uuid.uuid4()),
+        "prompt": data.get("prompt") or "",
+        "answer": data.get("answer") or "",
+        "plan": data.get("plan"),
+        "table": data.get("table"),
+        "chart": data.get("chart"),
+        "sql": data.get("sql"),
+        "latencyMs": data.get("latencyMs"),
+        "rating": rating,
+        "createdAt": data.get("createdAt") or datetime.utcnow().isoformat(),
+    }
+
+    existing = _fetch_feedback_entry_by_id(entry["messageId"])
+    if existing:
+        entry.setdefault("prompt", existing.get("prompt"))
+        entry.setdefault("answer", existing.get("answer"))
+        entry.setdefault("plan", existing.get("plan"))
+        entry.setdefault("dataset", existing.get("dataset"))
+        entry.setdefault("table", existing.get("table"))
+        entry.setdefault("chart", existing.get("chart"))
+        entry.setdefault("sql", existing.get("sql"))
+        entry.setdefault("createdAt", existing.get("createdAt"))
+        entry.setdefault("status", existing.get("status"))
+        entry.setdefault("source_message_id", existing.get("source_message_id"))
+
+    if not entry.get("dataset") and data.get("dataset"):
+        entry["dataset"] = data.get("dataset")
+
+    if not entry["prompt"]:
+        return jsonify({"error": "Prompt is required"}), 400
+
+    entry["status"] = CHAT_FEEDBACK_STATUS_APPROVED if rating == "up" else CHAT_FEEDBACK_STATUS_REJECTED
+
+    canonical_status = None
+    try:
+        _record_feedback(entry)
+        source_id = entry.get("source_message_id")
+        if source_id and source_id != entry["messageId"]:
+            canonical_entry = _fetch_feedback_entry_by_id(source_id)
+            if canonical_entry:
+                canonical_entry["rating"] = rating
+                canonical_entry["status"] = entry["status"]
+                _record_feedback(canonical_entry)
+                canonical_status = canonical_entry["status"]
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        logger.error("Failed to store feedback: %s", exc)
+        return jsonify({"error": "Failed to store feedback"}), 500
+
+    return jsonify({
+        "status": "stored",
+        "messageId": entry["messageId"],
+        "feedback_status": entry["status"],
+        "canonical_status": canonical_status,
+    })
 
 @app.get("/api/earnings")
 def earnings():
