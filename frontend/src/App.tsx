@@ -57,15 +57,9 @@ export default function App() {
       {/* Keep your header exactly as-is (blur stays) */}
       <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-[color:var(--bg)]/80 backdrop-blur">
         <div className="mx-auto grid max-w-6xl grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4">
-          {/* Brand: SmartWealth gradient + AI white */}
-          <Link to="/" className="flex items-center gap-2 font-bold tracking-tight select-none">
-            <span
-              className="text-xl bg-clip-text text-transparent"
-              style={{ backgroundImage: 'linear-gradient(90deg, var(--brand2), var(--brand1))' }}
-            >
-              SmartWealth
-            </span>
-            <span className="text-xl text-white">AI</span>
+          {/* Brand: SmartWealth mark with luminous AI capsule */}
+          <Link to="/" className="select-none">
+            <BrandMark />
           </Link>
 
           <ProTabs activePath={location.pathname} />
@@ -136,6 +130,29 @@ function DropdownPortal({
       {children}
     </div>,
     document.body
+  )
+}
+
+/* ================= Brand Mark ================= */
+function BrandMark() {
+  return (
+    <span className="group relative inline-flex items-center gap-3">
+      <span className="relative flex items-baseline gap-1 text-[24px] leading-none">
+        <span
+          className="font-black tracking-tight text-transparent drop-shadow-sm transition-transform duration-200 group-hover:-translate-y-[1px]"
+          style={{ backgroundImage: 'linear-gradient(95deg, #8b5bff 0%, #b18cff 55%, #7b5bfb 100%)', WebkitBackgroundClip: 'text' }}
+        >
+          Smart
+        </span>
+        <span className="font-black tracking-tight text-slate-900 transition-colors duration-200 dark:text-white/95">
+          Wealth
+        </span>
+      </span>
+      <span className="relative inline-flex items-center justify-center overflow-hidden rounded-2xl px-3.5 py-1.5 text-[12px] font-semibold uppercase tracking-[0.28em] text-white">
+        <span className="absolute inset-0 rounded-2xl bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.35),transparent_55%),linear-gradient(120deg,#0f172a_0%,#4f46e5_45%,#7c3aed_100%)] shadow-[0_18px_38px_rgba(93,63,211,0.38)] transition duration-200 group-hover:scale-[1.03]" />
+        <span className="relative z-10">AI</span>
+      </span>
+    </span>
   )
 }
 

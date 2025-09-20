@@ -148,7 +148,7 @@ function CompanyCombobox({ label, items, value, onPick, placeholder }: {
   return (
     <div ref={ref} className="relative">
       <label className="text-xs text-[var(--muted)]">{label}</label>
-      <div className="mt-1 flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 shadow-[0_10px_32px_rgba(8,12,35,0.35)]">
+      <div className="mt-1 flex items-center gap-2 rounded-2xl border border-[var(--border)]/60 bg-white/95 px-3 py-2 shadow-[0_18px_44px_rgba(15,23,42,0.14)] transition dark:bg-[var(--panel)]/85">
         <input
           value={open ? q : value}
           onChange={(e) => {
@@ -195,7 +195,7 @@ function CompanyCombobox({ label, items, value, onPick, placeholder }: {
         </button>
       </div>
       {open && (
-        <div className="absolute z-[1200] mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[var(--border)]/70 bg-[#080f25]/95 p-1 shadow-[0_28px_60px_rgba(8,12,35,0.6)] backdrop-blur">
+        <div className="absolute z-[1200] mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[var(--border)]/70 bg-white/98 p-1 shadow-[0_28px_60px_rgba(15,23,42,0.22)] backdrop-blur-sm dark:bg-[#080f25]/95 dark:shadow-[0_28px_60px_rgba(8,12,35,0.6)]">
           {filtered.length === 0 ? (
             <div className="px-3 py-2 text-xs text-[var(--muted)]">No matches</div>
           ) : (
@@ -209,7 +209,9 @@ function CompanyCombobox({ label, items, value, onPick, placeholder }: {
                   setOpen(false);
                 }}
                 className={`flex cursor-pointer items-center rounded-xl px-3 py-2 text-sm transition ${
-                  hi === i ? "bg-white/10" : "hover:bg-white/5"
+                  hi === i
+                    ? "bg-[var(--brand2)]/15 text-[var(--text)] dark:bg-white/10 dark:text-white"
+                    : "hover:bg-[var(--brand2)]/10 dark:hover:bg-white/5"
                 }`}
               >
                 <span className="truncate">{it.label}</span>
@@ -224,18 +226,24 @@ function CompanyCombobox({ label, items, value, onPick, placeholder }: {
 
 const SIDE_STYLES = {
   supplier: {
-    gradient: "from-[#76fcb9]/30 to-[#3cc4ff]/12",
-    border: "border-[#76fcb9]/35",
-    badge: "text-[#76fcb9]",
-    badgeColor: "#76fcb9",
-    chip: "bg-[#76fcb9]/18 border-[#76fcb9]/25 text-[#b9ffe8]",
+    gradient:
+      "from-[#e8fff6]/90 via-white/70 to-[#f0f9ff]/90 dark:from-[#76fcb9]/30 dark:via-transparent dark:to-[#3cc4ff]/12",
+    border: "border-[#9ce9c7]/60 dark:border-[#76fcb9]/35",
+    badge:
+      "border-[#34d399]/25 bg-[#ecfdf5] text-[#047857] dark:border-[#76fcb9]/35 dark:bg-[#0b172c]/60 dark:text-[#bfffe9]",
+    badgeColor: "#047857",
+    chip:
+      "border-[#34d399]/35 bg-[#f3fff9] text-[#065f46] dark:border-[#76fcb9]/35 dark:bg-[#0f1d34]/60 dark:text-[#a3ffe4]",
   },
   customer: {
-    gradient: "from-[#ff9add]/25 to-[#7f5bff]/12",
-    border: "border-[#b28bff]/35",
-    badge: "text-[#d5b3ff]",
-    badgeColor: "#d5b3ff",
-    chip: "bg-[#7f5bff]/18 border-[#7f5bff]/28 text-[#e9ddff]",
+    gradient:
+      "from-[#f7edff]/90 via-white/70 to-[#f3f2ff]/90 dark:from-[#ff9add]/25 dark:via-transparent dark:to-[#7f5bff]/12",
+    border: "border-[#dac8ff]/60 dark:border-[#b28bff]/35",
+    badge:
+      "border-[#c084fc]/30 bg-[#f8f1ff] text-[#5b21b6] dark:border-[#b28bff]/40 dark:bg-[#0f1029]/60 dark:text-[#e9ddff]",
+    badgeColor: "#5b21b6",
+    chip:
+      "border-[#b28bff]/35 bg-[#f6f2ff] text-[#4338ca] dark:border-[#b28bff]/35 dark:bg-[#111534]/60 dark:text-[#e5dbff]",
   },
 } as const;
 
@@ -557,7 +565,7 @@ export default function Vendors() {
           </div>
           <button
             onClick={() => load({ refresh: true })}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--panel)] text-[var(--muted)] transition hover:text-[var(--text)]"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border)]/60 bg-white/95 text-[var(--muted)] transition hover:text-[var(--text)] hover:shadow-[0_12px_26px_rgba(15,23,42,0.16)] dark:bg-[var(--panel)]"
             title="Refresh data from Databricks"
             disabled={refreshing}
           >
@@ -576,7 +584,7 @@ export default function Vendors() {
           </button>
         </div>
         {rows.length > 0 && (
-          <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/60 px-3 py-1 text-xs text-[var(--muted)]">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/50 bg-white/95 px-3 py-1 text-xs text-[var(--muted)] shadow-sm dark:bg-[var(--panel)]/70">
             <span className="h-2 w-2 rounded-full bg-[var(--brand2)]" />
             {rows.length.toLocaleString()} relationships · {companies.length.toLocaleString()} companies
           </div>
@@ -585,7 +593,7 @@ export default function Vendors() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
         <aside className="space-y-5">
-          <div className="rounded-3xl border border-[var(--border)]/60 bg-[var(--panel)]/70 p-5 shadow-[0_24px_60px_rgba(8,12,35,0.45)]">
+          <div className="rounded-3xl border border-[var(--border)]/55 bg-white/98 p-6 shadow-[0_30px_80px_rgba(15,23,42,0.16)] transition dark:bg-[var(--panel)]/75">
             <CompanyCombobox
               label="Select company"
               items={companyItems}
@@ -598,7 +606,7 @@ export default function Vendors() {
             </p>
           </div>
 
-          <div className="rounded-3xl border border-[var(--border)]/60 bg-[var(--panel)]/65 p-5 space-y-4">
+          <div className="rounded-3xl border border-[var(--border)]/55 bg-white/98 p-5 space-y-4 shadow-[0_24px_60px_rgba(15,23,42,0.12)] transition dark:bg-[var(--panel)]/75">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold">Filters</h2>
               <button
@@ -619,7 +627,7 @@ export default function Vendors() {
                 <select
                   value={filterRel}
                   onChange={(e) => setFilterRel(e.target.value as any)}
-                  className="mt-1 w-full rounded-2xl border border-[var(--border)] bg-[var(--panel)]/80 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/60 focus:ring-2 focus:ring-[var(--brand2)]/30"
+                  className="mt-1 w-full rounded-2xl border border-[var(--border)]/60 bg-white/95 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/50 focus:ring-2 focus:ring-[var(--brand2)]/30 dark:bg-[var(--panel)]/85"
                 >
                   <option value="all">All</option>
                   <option value="supplier">Suppliers</option>
@@ -631,7 +639,7 @@ export default function Vendors() {
                 <select
                   value={filterRegion}
                   onChange={(e) => setFilterRegion(e.target.value)}
-                  className="mt-1 w-full rounded-2xl border border-[var(--border)] bg-[var(--panel)]/80 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/60 focus:ring-2 focus:ring-[var(--brand2)]/30"
+                  className="mt-1 w-full rounded-2xl border border-[var(--border)]/60 bg-white/95 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/50 focus:ring-2 focus:ring-[var(--brand2)]/30 dark:bg-[var(--panel)]/85"
                 >
                   {regionChoices.map((r) => (
                     <option key={r} value={r}>
@@ -645,7 +653,7 @@ export default function Vendors() {
                 <select
                   value={filterTier}
                   onChange={(e) => setFilterTier(e.target.value)}
-                  className="mt-1 w-full rounded-2xl border border-[var(--border)] bg-[var(--panel)]/80 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/60 focus:ring-2 focus:ring-[var(--brand2)]/30"
+                  className="mt-1 w-full rounded-2xl border border-[var(--border)]/60 bg-white/95 px-3 py-2 text-sm outline-none focus:border-[var(--brand2)]/50 focus:ring-2 focus:ring-[var(--brand2)]/30 dark:bg-[var(--panel)]/85"
                 >
                   {tierChoices.map((t) => (
                     <option key={t} value={t}>
@@ -661,7 +669,7 @@ export default function Vendors() {
         </aside>
 
         <main className="space-y-6">
-          <div className="rounded-3xl border border-[var(--border)]/50 bg-[radial-gradient(circle_at_top,_rgba(124,140,255,0.18),rgba(10,22,48,0.35))] p-4 sm:p-6 shadow-[0_28px_60px_rgba(10,16,48,0.45)]">
+          <div className="rounded-3xl border border-[var(--border)]/55 bg-white/98 p-4 sm:p-6 shadow-[0_32px_88px_rgba(15,23,42,0.16)] transition dark:bg-[var(--panel)]/75">
             {selected ? (
               <NetworkCanvas selected={selected} graph={graph} />
             ) : (
@@ -688,9 +696,9 @@ export default function Vendors() {
 
 function SummaryPanel({ summary, selected }: { summary: SummaryMetrics; selected: { company: string; ticker: string } }) {
   return (
-    <div className="rounded-3xl border border-[var(--border)]/60 bg-[var(--panel)]/70 p-5 shadow-[0_24px_60px_rgba(8,12,35,0.45)]">
+    <div className="rounded-3xl border border-[var(--border)]/55 bg-white/98 p-5 shadow-[0_30px_80px_rgba(15,23,42,0.16)] transition dark:bg-[var(--panel)]/75">
       <div className="flex items-start gap-4">
-        <div className="h-14 w-14 overflow-hidden rounded-2xl border border-[var(--border)]/60 bg-[var(--panel)]/80">
+        <div className="h-14 w-14 overflow-hidden rounded-2xl border border-[var(--border)]/60 bg-white/95 shadow-sm dark:bg-[var(--panel)]/80">
           <CompanyLogo symbol={selected.ticker} name={selected.company} className="h-full w-full" />
         </div>
         <div className="space-y-1">
@@ -740,7 +748,7 @@ type SummaryMetrics = {
 
 function SummaryCard({ label, value, caption, accent }: { label: string; value: React.ReactNode; caption?: string; accent: string }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-[var(--border)]/45 bg-[var(--panel)]/70 p-4">
+    <div className="relative overflow-hidden rounded-2xl border border-[var(--border)]/55 bg-white/98 p-4 shadow-[0_16px_44px_rgba(15,23,42,0.12)] dark:bg-[var(--panel)]/75">
       <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${accent}`} />
       <div className="text-[11px] uppercase tracking-wide text-[var(--muted)]">{label}</div>
       <div className="mt-2 text-2xl font-bold text-[var(--text)]">{value}</div>
@@ -805,11 +813,13 @@ function VendorCard({ item, accent }: { item: Aggregate; accent: Accent }) {
   const notes = Array.from(new Set(item.notes.filter(Boolean))).slice(0, 2);
 
   return (
-    <div className={`relative overflow-hidden rounded-2xl border bg-[var(--panel)]/82 p-4 transition-all duration-200 ease-out ${accent.border} hover:border-white/40 hover:-translate-y-1`}>
-      <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${accent.gradient} opacity-80`} />
+    <div
+      className={`relative overflow-hidden rounded-2xl border ${accent.border} bg-white/98 p-5 shadow-[0_22px_55px_rgba(15,23,42,0.16)] transition-all duration-200 ease-out hover:-translate-y-1 hover:shadow-[0_32px_88px_rgba(15,23,42,0.2)] dark:bg-[var(--panel)]/90`}
+    >
+      <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${accent.gradient}`} />
       <div className="relative space-y-4">
         <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-[var(--border)]/60 bg-[var(--panel)]/80">
+          <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl border border-[var(--border)]/50 bg-white/98 shadow-sm dark:bg-[var(--panel)]/80">
             <CompanyLogo symbol={item.inferredTicker} name={item.name} className="h-full w-full" fallback={item.name} />
           </div>
           <div className="flex-1 space-y-1">
@@ -826,7 +836,7 @@ function VendorCard({ item, accent }: { item: Aggregate; accent: Accent }) {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3 text-xs">
+        <div className="grid gap-3 text-xs sm:grid-cols-3">
           <StatPill label="Strength" value={`${strength}%`} accent={accent} />
           <StatPill label="Contracts" value={item.rows.length} caption="relationships" accent={accent} />
           <StatPill label="Est. value" value={item.usdM ? `$${abbrevMoney(item.usdM)}+` : "Not disclosed"} accent={accent} />
@@ -839,7 +849,7 @@ function VendorCard({ item, accent }: { item: Aggregate; accent: Accent }) {
         </div>
 
         {notes.length > 0 && (
-          <div className="rounded-2xl border border-[var(--border)]/40 bg-black/15 px-3 py-2 text-[11px] text-[var(--muted)]">
+          <div className="rounded-2xl border border-[var(--border)]/40 bg-white/90 px-3 py-2 text-[11px] text-slate-600 dark:bg-black/30 dark:text-[var(--muted)]">
             {notes.join(" • ")}
           </div>
         )}
@@ -851,8 +861,8 @@ function VendorCard({ item, accent }: { item: Aggregate; accent: Accent }) {
 function StatPill({ label, value, caption, accent }: { label: string; value: React.ReactNode; caption?: string; accent: Accent }) {
   return (
     <div
-      className="rounded-2xl border border-[var(--border)]/40 bg-[var(--panel)]/70 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-      style={{ boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), 0 12px 26px rgba(8,12,35,0.22)" }}
+      className="rounded-2xl border border-[var(--border)]/50 bg-white/98 px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.65)] dark:bg-[var(--panel)]/80"
+      style={{ boxShadow: "inset 0 1px 0 rgba(255,255,255,0.65), 0 18px 44px rgba(15,23,42,0.14)" }}
     >
       <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{label}</div>
       <div className="mt-1 text-sm font-semibold" style={{ color: accent.badgeColor }}>{value}</div>
@@ -863,7 +873,7 @@ function StatPill({ label, value, caption, accent }: { label: string; value: Rea
 
 function Chip({ children, accent }: { children: React.ReactNode; accent: Accent }) {
   return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] leading-tight ${accent.chip}`}>
+    <span className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] font-medium leading-tight ${accent.chip}`}>
       {children}
     </span>
   );
@@ -871,7 +881,11 @@ function Chip({ children, accent }: { children: React.ReactNode; accent: Accent 
 
 function EmptyState({ text, align = "left" }: { text: string; align?: "left" | "right" }) {
   return (
-    <div className={`rounded-2xl border border-dashed border-[var(--border)]/40 bg-[var(--panel)]/40 px-4 py-3 text-xs text-[var(--muted)] ${align === "right" ? "md:text-right" : ""}`}>
+    <div
+      className={`rounded-2xl border border-dashed border-[var(--border)]/50 bg-white/95 px-4 py-3 text-xs text-[var(--muted)] shadow-sm dark:bg-[var(--panel)]/60 ${
+        align === "right" ? "md:text-right" : ""
+      }`}
+    >
       {text}
     </div>
   );
@@ -904,26 +918,36 @@ function NetworkCanvas({ selected, graph }: { selected: { company: string; ticke
   const H = dim.H;
 
   return (
-    <div className="rounded-2xl border border-[var(--border)]/50 bg-[var(--bg)]/[0.25] p-4">
+    <div className="rounded-3xl border border-[var(--border)]/55 bg-white/98 p-4 shadow-[0_36px_96px_rgba(15,23,42,0.15)] transition dark:bg-[var(--panel)]/75">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="font-semibold text-sm text-[var(--text)]">
           {selected.company} ({selected.ticker})
         </div>
         <div className="flex items-center gap-2">
-          <button className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-white/5" onClick={() => setZoom((z) => Math.max(0.65, z - 0.1))}>
+          <button
+            className="rounded-md border border-[var(--border)]/60 bg-white/95 px-2 py-1 shadow-sm transition hover:bg-[var(--brand2)]/10 dark:bg-transparent dark:hover:bg-white/10"
+            onClick={() => setZoom((z) => Math.max(0.65, z - 0.1))}
+          >
             −
           </button>
-          <span className="w-12 text-center">{Math.round(zoom * 100)}%</span>
-          <button className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-white/5" onClick={() => setZoom((z) => Math.min(1.6, z + 0.1))}>
+          <span className="w-12 text-center font-semibold text-[var(--text)]">{Math.round(zoom * 100)}%</span>
+          <button
+            className="rounded-md border border-[var(--border)]/60 bg-white/95 px-2 py-1 shadow-sm transition hover:bg-[var(--brand2)]/10 dark:bg-transparent dark:hover:bg-white/10"
+            onClick={() => setZoom((z) => Math.min(1.6, z + 0.1))}
+          >
             +
           </button>
-          <button className="rounded-md border border-[var(--border)] px-2 py-1 hover:bg-white/5" onClick={() => setZoom(1)}>
+          <button
+            className="rounded-md border border-[var(--border)]/60 bg-white/95 px-2 py-1 shadow-sm transition hover:bg-[var(--brand2)]/10 dark:bg-transparent dark:hover:bg-white/10"
+            onClick={() => setZoom(1)}
+          >
             Reset
           </button>
         </div>
       </div>
 
-      <div className="relative mx-auto max-w-3xl overflow-hidden rounded-xl bg-[var(--panel)]/70">
+      <div className="relative mx-auto max-w-3xl overflow-hidden rounded-2xl bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_24px_60px_rgba(15,23,42,0.12)] dark:bg-[#0f172a]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(124,140,255,0.18),transparent_65%)] opacity-70 dark:opacity-40" />
         <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`} className="block" shapeRendering="geometricPrecision">
           <defs>
             <linearGradient id="grad-supplier" x1="0" y1="0" x2="1" y2="0">
@@ -1035,7 +1059,7 @@ function NetworkCanvas({ selected, graph }: { selected: { company: string; ticke
                   <circle cx={n.x} cy={n.y} r={r + 4} fill="transparent" stroke="white" strokeOpacity={0.12} />
                   <circle cx={n.x} cy={n.y} r={r} fill="var(--panel)" stroke="var(--border)" strokeWidth={1.2} />
                   <foreignObject x={n.x - r + 4} y={n.y - r + 4} width={2 * (r - 4)} height={2 * (r - 4)}>
-                    <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-xl border border-[var(--border)]/40 bg-[var(--panel)]/60">
+                    <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-xl border border-[var(--border)]/40 bg-white/95 dark:bg-[var(--panel)]/60">
                       <CompanyLogo symbol={n.inferredTicker} name={n.label} className="h-full w-full" fallback={n.label} />
                     </div>
                   </foreignObject>
@@ -1051,7 +1075,7 @@ function NetworkCanvas({ selected, graph }: { selected: { company: string; ticke
         </svg>
 
         {tipNode && (
-          <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg border border-[var(--border)] bg-[var(--panel)]/95 px-3 py-2 text-[11px]" style={{ boxShadow: "0 2px 18px rgba(0,0,0,0.22)" }}>
+          <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg border border-[var(--border)]/60 bg-white/98 px-3 py-2 text-[11px] shadow-[0_12px_28px_rgba(15,23,42,0.18)] dark:bg-[var(--panel)]/95">
             <div className="font-semibold text-[var(--text)]">{tipNode.label}</div>
             <div className="text-[var(--muted)]">
               {tipNode.side === "supplier"
@@ -1089,7 +1113,10 @@ function Legend({ suppliers, customers }: { suppliers: number; customers: number
 function NodeModal({ node, onClose }: { node: Node; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[240] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="relative w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="relative w-full max-w-md rounded-2xl border border-[var(--border)]/60 bg-white/98 p-5 shadow-[0_34px_88px_rgba(15,23,42,0.35)] dark:bg-[var(--panel)]"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button onClick={onClose} className="absolute right-4 top-4 rounded-md border border-[var(--border)] px-2 py-1 text-xs hover:bg-white/5">
           Close
         </button>
