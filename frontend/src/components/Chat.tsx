@@ -95,6 +95,7 @@ type AssistantMsg = {
   feedback?: 'up' | 'down' | null
   plan?: Record<string, unknown> | null
   followups?: string[] | null
+  tablePreview?: Record<string, unknown>[] | null
 }
 
 type UserMsg = { role: 'user'; text: string }
@@ -260,7 +261,7 @@ export default function Chat() {
     }
   }, [isLoading])
 
-  function renderTable(table: TablePayload | undefined) {
+  const renderTable = (table: TablePayload | undefined) => {
     if (!table || !table.rows?.length) return null
 
     return (
@@ -291,6 +292,45 @@ export default function Chat() {
           </tbody>
         </table>
       </div>
+    )
+  }
+
+  const renderTableSection = (msg: Msg) => {
+    if (!isAssistant(msg) || !msg.table) return null
+    const table = msg.table
+    const previewSource = msg.tablePreview && msg.tablePreview.length ? msg.tablePreview : table.rows.slice(0, 3)
+    const previewColumns = table.columns.slice(0, Math.min(3, table.columns.length))
+
+    return (
+      <details className="group mt-3 overflow-hidden rounded-2xl border border-[var(--border)]/80 bg-[var(--panel)]/50 text-xs backdrop-blur transition">
+        <summary className="flex cursor-pointer select-none items-center justify-between gap-2 px-3 py-2 text-[10px] uppercase tracking-widest text-[var(--brand2)] outline-none transition">
+          <span>View detailed table</span>
+          <span className="text-[8px] text-[var(--muted)]">Click to expand</span>
+        </summary>
+        <div className="space-y-3 px-3 pb-3">
+          {previewSource && previewSource.length ? (
+            <ul className="space-y-2 text-[11px] text-[var(--muted)]">
+              {previewSource.map((row, idx) => (
+                <li
+                  key={idx}
+                  className="rounded-lg border border-[var(--border)]/40 bg-[var(--bg)]/40 px-3 py-2 text-[var(--text)]/90"
+                >
+                  {previewColumns.map((col, colIdx) => (
+                    <span key={`${col.key}-${colIdx}`}>
+                      <span className="font-semibold text-[var(--text)]">{col.label}:</span>{' '}
+                      <span>{formatCell((row as any)[col.key], col.key)}</span>
+                      {colIdx < previewColumns.length - 1 ? (
+                        <span className="mx-1 text-[var(--muted)]">•</span>
+                      ) : null}
+                    </span>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {renderTable(table)}
+        </div>
+      </details>
     )
   }
 
@@ -445,6 +485,7 @@ export default function Chat() {
         feedback: null,
         plan: data?.plan ?? null,
         followups: (data?.followups as string[] | undefined) ?? null,
+        tablePreview: (data?.tablePreview as Record<string, unknown>[] | undefined) ?? null,
       }
       setMessages((m) => [...m, assistant])
     } catch (err) {
@@ -505,8 +546,8 @@ export default function Chat() {
             >
               <div className="text-[10px] uppercase tracking-widest text-[var(--muted)]">{m.role}</div>
               <div className="mt-1 space-y-3 leading-relaxed">
-                <div>{isAssistant(m) ? m.text : m.text}</div>
-                {isAssistant(m) && renderTable(m.table)}
+                <div>{m.text}</div>
+                {renderTableSection(m)}
                 {isAssistant(m) && m.chart?.data?.length ? (
                   <button
                     onClick={() => handleOpenChart(m.chart!)}

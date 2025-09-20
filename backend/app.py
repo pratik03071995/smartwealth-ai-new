@@ -2824,12 +2824,14 @@ Always return JSON only—no commentary. Prefer precise column names from the sc
 SUMMARY_SYSTEM_PROMPT = """
 You are SmartWealth AI, a senior research analyst. Use ONLY the supplied rows and plan metadata to craft a polished,
 insightful response:
-- Start with a one-sentence headline that answers the question directly.
-- Provide 2–3 supporting observations using human-friendly formatting (e.g. $1.2T, 15.4%, 22k employees).
-- If multiple tickers are present, compare or rank them and note any standout.
-- If the dataset is earnings, mention upcoming dates/guidance; if scores, interpret high/low scores; if vendors, describe the relationship context.
-- End with a takeaway or suggestion (e.g. what to watch next).
-- If no rows are returned, say so and suggest another query instead of guessing.
+- Open with a succinct headline that directly answers the user’s question.
+- Follow with a short paragraph (2–4 sentences) that synthesizes the most important facts from the table: highlight standout metrics, context, comparisons, and what the numbers mean.
+- Mention only the most relevant values (e.g. headquarters location, market cap, revenue growth) instead of listing every column.
+- If multiple tickers appear, compare or rank them and call out leaders or laggards.
+- For earnings rows, include the next event date/time and any guidance; for scores, interpret high/low factors; for vendors, describe the relationship strength and value.
+- Close with a forward-looking takeaway or recommended next step.
+- Never repeat raw table rows verbatim; translate the data into natural language.
+- If no rows are returned, say so and invite the user to refine their query.
 Keep the tone professional but approachable. Avoid repeating raw table data verbatim when a summary suffices.
 """.strip()
 
@@ -2992,6 +2994,188 @@ def _prepare_preview_rows(rows: list[dict[str, Any]], limit: int = 10) -> list[d
                 clean[k] = _to_native(v)
         preview.append(clean)
     return preview
+
+
+def _format_value_for_summary(value: Any, col: str, config: DatasetConfig) -> Optional[str]:
+    if value in (None, "", "-"):
+        return None
+    if col in config.numeric_columns or col in config.currency_columns or col in config.percent_columns:
+        try:
+            return _format_number(value, col, config)
+        except Exception:
+            return str(value)
+    if isinstance(value, (datetime, date)):
+        return _to_iso(value)
+    return str(value)
+
+
+def _auto_summary_from_rows(plan: ChatPlan, rows: list[dict[str, Any]]) -> Optional[str]:
+    if not rows:
+        return None
+    config = plan.config
+    row = rows[0]
+    dataset = plan.dataset
+    prompt_lower = plan.summary_instruction or ""
+    prompt_lower = prompt_lower.lower()
+
+    def get(*keys: str) -> Optional[str]:
+        for key in keys:
+            if key in row and row[key] not in (None, "", "-"):
+                return _format_value_for_summary(row[key], key, config)
+        return None
+
+    def contains_any(*terms: str) -> bool:
+        return any(term in prompt_lower for term in terms if term)
+
+    ticker = get(config.ticker_column or "symbol", "symbol")
+    name = get("companyName", "company_name", "company")
+
+    if dataset == "profiles":
+        hq_parts = [get("address"), get("city"), get("state"), get("country")]
+        hq = ", ".join(part for part in hq_parts if part)
+        market_cap = get("marketCap")
+        price = get("price")
+        ceo = get("ceo")
+        sector = get("sector")
+        phone = get("phone")
+        pieces = []
+        subject = name or ticker or "The company"
+        if contains_any("phone", "contact", "call", "number") and phone:
+            pieces.append(f"{subject} can be reached at {phone}.")
+        if contains_any("where", "headquarter", "headquarters", "located", "address", "office") and hq:
+            pieces.append(f"{subject} is headquartered at {hq}.")
+        if not pieces and hq:
+            pieces.append(f"{subject} is headquartered at {hq}.")
+        if not pieces and name:
+            pieces.append(f"{subject} is part of the {sector or 'listed'} universe.")
+        if price or market_cap:
+            finance = []
+            if price:
+                finance.append(f"trades around {price}")
+            if market_cap:
+                finance.append(f"with a market cap near {market_cap}")
+            if finance:
+                pieces.append("It " + " and ".join(finance) + ".")
+        if sector and not contains_any("phone", "contact"):
+            pieces.append(f"It operates within the {sector} sector.")
+        if ceo:
+            pieces.append(f"CEO: {ceo}.")
+        if not pieces:
+            return None
+        return " ".join(pieces)
+
+    if dataset == "earnings":
+        event_date = get("event_date")
+        time_hint = get("time_hint")
+        period = get("period")
+        guidance_eps = get("guidanceEPS")
+        guidance_rev = get("guidanceRevenue")
+        eps_est = get("estimateEPS", "epsEstimated")
+        revenue_est = get("revenueEstimate", "revenueEstimated")
+        subject = name or ticker or "The company"
+        pieces = []
+        if event_date:
+            timing = f"on {event_date}"
+            if time_hint:
+                timing += f" ({time_hint})"
+            pieces.append(f"{subject} is slated to report {period or 'earnings'} {timing}.")
+        if eps_est or revenue_est:
+            est_parts = []
+            if eps_est:
+                est_parts.append(f"EPS guidance sits near {eps_est}")
+            if revenue_est:
+                est_parts.append(f"revenues expected around {revenue_est}")
+            pieces.append("Current estimates suggest " + " and ".join(est_parts) + ".")
+        if guidance_eps or guidance_rev:
+            guide_parts = []
+            if guidance_eps:
+                guide_parts.append(f"EPS guidance of {guidance_eps}")
+            if guidance_rev:
+                guide_parts.append(f"revenue guidance of {guidance_rev}")
+            pieces.append("Management is signalling " + " and ".join(guide_parts) + ".")
+        if not pieces:
+            return None
+        return " ".join(pieces)
+
+    if dataset == "scores":
+        overall = get("overall_score")
+        price = get("px")
+        sector = get("sector")
+        innovation = get("score_innovation")
+        fundamentals = get("score_fundamentals")
+        valuation = get("score_valuation")
+        sentiment = get("score_sentiment")
+        pieces = []
+        subject = name or ticker or "The company"
+        if overall:
+            pieces.append(f"{subject} carries an overall SmartWealth score of {overall}.")
+        if sector or price:
+            details = []
+            if sector:
+                details.append(f"operating in {sector}")
+            if price:
+                details.append(f"trading near {price}")
+            if details:
+                pieces.append(subject.split()[0] + " " + " and ".join(details) + ".")
+        key_scores = []
+        if fundamentals:
+            key_scores.append(f"fundamentals {fundamentals}")
+        if valuation:
+            key_scores.append(f"valuation {valuation}")
+        if sentiment:
+            key_scores.append(f"sentiment {sentiment}")
+        if innovation:
+            key_scores.append(f"innovation {innovation}")
+        if key_scores:
+            pieces.append("Factor profile: " + ", ".join(key_scores) + ".")
+        if not pieces:
+            return None
+        return " ".join(pieces)
+
+    if dataset == "vendors":
+        relation = get("relation_type")
+        counterparty = get("counterparty_name")
+        strength = get("relationship_strength")
+        value = get("est_contract_value_usd_m")
+        region = get("region")
+        category = get("category")
+        pieces = []
+        subject = name or ticker or "The company"
+        if relation and counterparty:
+            pieces.append(f"{subject} has a {relation.lower()} relationship with {counterparty}.")
+        if strength or value:
+            detail = []
+            if strength:
+                detail.append(f"relationship strength ~{strength}")
+            if value:
+                detail.append(f"estimated contract value {value}")
+            pieces.append("Key stats: " + ", ".join(detail) + ".")
+        if region or category:
+            geo = []
+            if region:
+                geo.append(region)
+            if category:
+                geo.append(category)
+            if geo:
+                pieces.append("Focus area: " + " • ".join(geo) + ".")
+        if not pieces:
+            return None
+        return " ".join(pieces)
+
+    return None
+
+
+def _summary_is_generic(summary: str) -> bool:
+    if not summary:
+        return True
+    lowered = summary.lower()
+    generic_starts = [
+        "here is what i found",
+        "i couldn't", "could not", "unable to",
+    ]
+    if any(lowered.startswith(prefix) for prefix in generic_starts):
+        return True
+    return len(summary.strip()) < 80
 
 
 def _execute_sql(sql: str, params: list[Any]) -> tuple[list[str], list[dict[str, Any]]]:
@@ -3317,6 +3501,12 @@ def handle_chat(user_prompt: str) -> dict[str, Any]:
     summary = _summarize_answer(user_prompt, plan, sql_raw, rows)
     display_sql = _render_sql_with_params(sql_raw, sql_params)
 
+    auto_summary = _auto_summary_from_rows(plan, rows)
+    if auto_summary and _summary_is_generic(summary):
+        summary = auto_summary
+
+    detail_preview = _prepare_preview_rows(rows, limit=3) if table_payload else None
+
     response: dict[str, Any] = {
         "reply": summary,
         "sql": display_sql,
@@ -3325,6 +3515,8 @@ def handle_chat(user_prompt: str) -> dict[str, Any]:
     }
     if table_payload:
         response["table"] = table_payload
+    if detail_preview:
+        response["tablePreview"] = detail_preview
     if chart_payload:
         response["chart"] = chart_payload
     if feedback_entry:
