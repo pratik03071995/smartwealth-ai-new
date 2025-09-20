@@ -49,21 +49,34 @@ The repository ships with Docker assets and helper scripts to run everything on 
    docker compose up -d
    ```
 
-### Deploying code updates
-1. From your local machine, resync the project (same `rsync` command as above; keep the excludes so cached dependencies are not copied).
-2. SSH into the VM and rebuild/restart the containers:
+### Deploying code updates (one-command workflow)
+
+The repo includes `deploy.sh`, which bundles the sync + rebuild steps. Usage:
+
+1. **(Optional)** drop a `deploy.config` next to the script to override defaults:
    ```bash
-   ssh -i ~/.ssh/id_rsa azureuser@<vm-ip>
-   cd /opt/smartwealth-ai-new
-   docker compose build frontend  # or add "backend" if Python deps changed
-   docker compose up -d
+   SSH_HOST=azureuser@<vm-ip>
+   SSH_KEY=$HOME/.ssh/id_rsa
+   SSH_PORT=22
+   REMOTE_DIR=/opt/smartwealth-ai-new
    ```
-3. Verify:
+   You can also export these variables instead of creating the file.
+
+2. Run the deploy:
+   ```bash
+   ./deploy.sh
+   ```
+   The script will:
+   - rsync the local workspace to `${SSH_HOST}:${REMOTE_DIR}` (excluding virtualenv, node_modules, dist, git, logs)
+   - SSH in and run `docker compose build backend frontend` followed by `docker compose up -d`
+
+3. Verify on the VM if desired:
    ```bash
    docker compose ps
-   docker compose logs -f frontend
    docker compose logs -f backend
+   docker compose logs -f frontend
    ```
+
 4. Visit `http://<vm-ip>/` (or your domain) to confirm the UI and API respond.
 
 ### Managing the service
