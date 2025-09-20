@@ -231,6 +231,11 @@ export default function Chat() {
     return null
   }, [chartSpec])
 
+  const actionButtonClass =
+    'inline-flex items-center gap-1 rounded-xl border border-[var(--border)]/60 bg-white/95 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--brand1)] shadow-[0_10px_30px_rgba(15,23,42,0.12)] transition hover:bg-[var(--brand2)]/14 hover:text-[var(--brand2)] dark:bg-white/10'
+  const chipClass =
+    'rounded-full border border-[var(--border)]/50 bg-white/95 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--brand1)] dark:bg-white/10'
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -302,18 +307,18 @@ export default function Chat() {
     const previewColumns = table.columns.slice(0, Math.min(3, table.columns.length))
 
     return (
-      <details className="group mt-3 overflow-hidden rounded-2xl border border-[var(--border)]/80 bg-[var(--panel)]/50 text-xs backdrop-blur transition">
-        <summary className="flex cursor-pointer select-none items-center justify-between gap-2 px-3 py-2 text-[10px] uppercase tracking-widest text-[var(--brand2)] outline-none transition">
+      <details className="group mt-3 overflow-hidden rounded-2xl border border-[var(--border)]/50 bg-white/96 text-xs shadow-[0_22px_60px_rgba(15,23,42,0.14)] transition dark:bg-[var(--panel)]">
+        <summary className="flex cursor-pointer select-none items-center justify-between gap-2 px-4 py-3 text-[10px] font-semibold uppercase tracking-[0.3em] text-[var(--brand1)] outline-none transition hover:bg-[var(--brand2)]/10">
           <span>View detailed table</span>
-          <span className="text-[8px] text-[var(--muted)]">Click to expand</span>
+          <span className="text-[8px] text-[var(--muted)]">Expand</span>
         </summary>
-        <div className="space-y-3 px-3 pb-3">
+        <div className="space-y-3 px-4 pb-4">
           {previewSource && previewSource.length ? (
             <ul className="space-y-2 text-[11px] text-[var(--muted)]">
               {previewSource.map((row, idx) => (
                 <li
                   key={idx}
-                  className="rounded-lg border border-[var(--border)]/40 bg-[var(--bg)]/40 px-3 py-2 text-[var(--text)]/90"
+                  className="rounded-xl border border-[var(--border)]/35 bg-white/92 px-3 py-2 text-[var(--text)] shadow-[0_10px_24px_rgba(15,23,42,0.08)] dark:bg-[var(--panel)]/70"
                 >
                   {previewColumns.map((col, colIdx) => (
                     <span key={`${col.key}-${colIdx}`}>
@@ -382,39 +387,33 @@ export default function Chat() {
         ? `Answered in ${formatLatency(msg.latencyMs)}`
         : null
     return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[9px] uppercase tracking-wider text-[var(--muted)]">
-        <div className="flex items-center gap-1 sm:gap-2">
-          <span className="opacity-80">Helpful?</span>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-[9px] uppercase tracking-[0.28em] text-[var(--muted)]">
+        <div className="flex items-center gap-2">
+          <span className="opacity-70">Helpful?</span>
           <button
             type="button"
             disabled={busy || selected === 'up'}
             onClick={() => submitFeedback(msg, 'up')}
-            className={`group rounded-full border border-[var(--border)] bg-[var(--panel)]/80 px-2 py-[5px] transition hover:bg-[var(--panel)] ${
-              selected === 'up' ? 'shadow-[0_0_12px_rgba(91,136,251,0.35)] text-[var(--brand2)]' : 'text-[var(--text)]'
-            } ${busy ? 'opacity-50' : ''}`}
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--border)]/60 bg-white/95 text-sm transition hover:-translate-y-[1px] hover:bg-[var(--brand2)]/12 hover:text-[var(--brand2)] dark:bg-white/10 ${
+              selected === 'up' ? 'shadow-[0_0_18px_rgba(91,136,251,0.35)] text-[var(--brand2)]' : 'text-[var(--text)]'
+            } ${busy ? 'opacity-40' : ''}`}
           >
-            <span className="inline-flex items-center gap-1">
-              <span className="text-base leading-none">👍</span>
-              <span className="hidden sm:inline">Yes</span>
-            </span>
+            <span className="text-base leading-none">👍</span>
           </button>
           <button
             type="button"
             disabled={busy || selected === 'down'}
             onClick={() => submitFeedback(msg, 'down')}
-            className={`group rounded-full border border-[var(--border)] bg-[var(--panel)]/80 px-2 py-[5px] transition hover:bg-[var(--panel)] ${
-              selected === 'down' ? 'shadow-[0_0_12px_rgba(239,68,68,0.35)] text-red-400' : 'text-[var(--text)]'
-            } ${busy ? 'opacity-50' : ''}`}
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--border)]/60 bg-white/95 text-sm transition hover:-translate-y-[1px] hover:bg-rose-100 hover:text-rose-500 dark:bg-white/10 ${
+              selected === 'down' ? 'shadow-[0_0_18px_rgba(239,68,68,0.35)] text-rose-400' : 'text-[var(--text)]'
+            } ${busy ? 'opacity-40' : ''}`}
           >
-            <span className="inline-flex items-center gap-1">
-              <span className="text-base leading-none">👎</span>
-              <span className="hidden sm:inline">No</span>
-            </span>
+            <span className="text-base leading-none">👎</span>
           </button>
-          {selected ? <span className="text-[var(--brand2)]">Appreciated!</span> : null}
+          {selected ? <span className="text-[var(--brand2)]">Thank you!</span> : null}
         </div>
         {latencyLabel ? (
-          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--panel)]/60 px-2.5 py-[4px] text-[8px] uppercase tracking-[0.18em] text-[var(--muted)]">
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-[var(--border)]/40 bg-white/95 px-2.5 py-[4px] text-[8px] uppercase tracking-[0.18em] text-[var(--muted)] shadow-[0_10px_24px_rgba(15,23,42,0.08)] dark:bg-white/10">
             <span className="h-1 w-1 rounded-full bg-[var(--brand2)]/70" />
             {latencyLabel}
           </span>
