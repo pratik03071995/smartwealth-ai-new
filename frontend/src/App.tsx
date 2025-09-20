@@ -7,7 +7,7 @@ function useThemeBoot() {
   const getInitial = () => {
     const saved = localStorage.getItem('theme')
     if (saved === 'light' || saved === 'dark') return saved as 'light' | 'dark'
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    return 'light'
   }
   const [theme] = React.useState<'light' | 'dark'>(getInitial)
   useEffect(() => {

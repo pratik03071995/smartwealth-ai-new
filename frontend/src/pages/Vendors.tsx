@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { buildApiUrl } from "../services/api";
 import { CompanyLogo } from "../utils/logos";
@@ -246,6 +246,7 @@ export default function Vendors() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [companyQuery, setCompanyQuery] = useState("");
   const [selected, setSelected] = useState<{ company: string; ticker: string } | null>(() => {
@@ -260,26 +261,31 @@ export default function Vendors() {
   const [filterRegion, setFilterRegion] = useState<string>("all");
   const [filterTier, setFilterTier] = useState<string>("all");
 
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
+  const load = useCallback(
+    async (opts?: { refresh?: boolean }) => {
+      const refresh = opts?.refresh ?? false;
       setLoading(true);
+      if (refresh) setRefreshing(true);
       setErr(null);
       try {
-        const res = await fetch(buildApiUrl("vendors/network"));
+        const url = refresh ? buildApiUrl('vendors/network?refresh=1') : buildApiUrl('vendors/network');
+        const res = await fetch(url);
         const j: VendorsResp = await res.json();
         if (!res.ok || j.error) throw new Error(j.error || `HTTP ${res.status}`);
-        if (!cancel) setRows(j.items || []);
+        setRows(j.items || []);
       } catch (e: any) {
-        if (!cancel) setErr(e?.message || "Failed to load vendor network");
+        setErr(e?.message || 'Failed to load vendor network');
       } finally {
-        if (!cancel) setLoading(false);
+        setLoading(false);
+        setRefreshing(false);
       }
-    })();
-    return () => {
-      cancel = true;
-    };
-  }, []);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const companies = useMemo(() => {
     const m = new Map<string, { company: string; ticker: string; count: number }>();
@@ -542,10 +548,33 @@ export default function Vendors() {
   return (
     <section className="mx-auto max-w-6xl px-4 sm:px-6 py-6 md:py-10 space-y-6">
       <header className="space-y-2">
-        <h1 className="text-3xl md:text-4xl font-extrabold">Vendor Network Intelligence</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Explore supplier and customer relationships with live metrics pulled from the SmartWealth warehouse.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-extrabold">Vendor Network Intelligence</h1>
+            <p className="text-sm text-[var(--muted)]">
+              Explore supplier and customer relationships with live metrics pulled from the SmartWealth warehouse.
+            </p>
+          </div>
+          <button
+            onClick={() => load({ refresh: true })}
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--panel)] text-[var(--muted)] transition hover:text-[var(--text)]"
+            title="Refresh data from Databricks"
+            disabled={refreshing}
+          >
+            <svg
+              className={`h-5 w-5 ${refreshing ? 'animate-spin' : ''}`}
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            >
+              <path d="M4 4v4h4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M16 16v-4h-4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M5.5 14.5a6 6 0 0 1 0-8.5L8 8" />
+              <path d="M14.5 5.5a6 6 0 0 1 0 8.5L12 12" />
+            </svg>
+          </button>
+        </div>
         {rows.length > 0 && (
           <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/60 px-3 py-1 text-xs text-[var(--muted)]">
             <span className="h-2 w-2 rounded-full bg-[var(--brand2)]" />

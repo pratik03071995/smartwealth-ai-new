@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import api from '../services/api'
 import CompanyLogo from '../utils/logos'
@@ -132,26 +132,29 @@ export default function CompanyInfo() {
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Profile | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
-  useEffect(() => {
-    let ignore = false
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        const { data } = await api.get('companies/profiles')
-        if (!ignore) setProfiles(Array.isArray(data?.items) ? data.items : [])
-      } catch (err: any) {
-        if (!ignore) setError(err?.message || 'Failed to load companies')
-      } finally {
-        if (!ignore) setLoading(false)
-      }
-    }
-    load()
-    return () => {
-      ignore = true
+  const load = useCallback(async (opts?: { refresh?: boolean }) => {
+    const refresh = opts?.refresh ?? false
+    if (refresh) setRefreshing(true)
+    setLoading(true)
+    setError(null)
+    try {
+      const { data } = await api.get('companies/profiles', {
+        params: refresh ? { refresh: 1 } : undefined,
+      })
+      setProfiles(Array.isArray(data?.items) ? data.items : [])
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load companies')
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
     }
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -173,7 +176,7 @@ export default function CompanyInfo() {
           <h1 className="text-3xl font-extrabold">Company Profiles</h1>
           <p className="text-sm text-[var(--muted)]">Live fundamentals from the NYSE profiles table. Tap a card to see full details.</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-center gap-3">
           <input
             type="search"
             value={search}
@@ -181,6 +184,25 @@ export default function CompanyInfo() {
             placeholder="Search symbol, name, sector…"
             className="w-64 rounded-2xl border border-[var(--border)] bg-[var(--panel)] px-4 py-2 text-sm outline-none focus:border-[var(--brand2)]/70 focus:ring-2 focus:ring-[var(--brand2)]/30"
           />
+          <button
+            onClick={() => load({ refresh: true })}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--panel)] text-[var(--muted)] transition hover:text-[var(--text)]"
+            title="Refresh data from Databricks"
+            disabled={refreshing}
+          >
+            <svg
+              className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            >
+              <path d="M4 4v4h4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M16 16v-4h-4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M5.5 14.5a6 6 0 0 1 0-8.5L8 8" />
+              <path d="M14.5 5.5a6 6 0 0 1 0 8.5L12 12" />
+            </svg>
+          </button>
         </div>
       </header>
 

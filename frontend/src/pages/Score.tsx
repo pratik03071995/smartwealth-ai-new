@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react'
+import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import api from '../services/api'
 import { CompanyLogo } from '../utils/logos'
@@ -152,31 +152,33 @@ export default function Score() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [sector, setSector] = useState<string>('all')
+  const [refreshing, setRefreshing] = useState(false)
 
-  useEffect(() => {
-    let mounted = true
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        const { data } = await api.get('scores/ranked')
-        if (!mounted) return
-        const items: ScoreRow[] = (data.items || []).map((row: ScoreRow, idx: number) => ({
-          ...row,
-          rank_overall: row.rank_overall ?? idx + 1,
-        }))
-        setRows(items)
-      } catch (err: any) {
-        if (mounted) setError(err?.message || 'Unable to load scores')
-      } finally {
-        if (mounted) setLoading(false)
-      }
-    }
-    load()
-    return () => {
-      mounted = false
+  const load = useCallback(async (opts?: { refresh?: boolean }) => {
+    const refresh = opts?.refresh ?? false
+    if (refresh) setRefreshing(true)
+    setLoading(true)
+    setError(null)
+    try {
+      const { data } = await api.get('scores/ranked', {
+        params: refresh ? { refresh: 1 } : undefined,
+      })
+      const items: ScoreRow[] = (data.items || []).map((row: ScoreRow, idx: number) => ({
+        ...row,
+        rank_overall: row.rank_overall ?? idx + 1,
+      }))
+      setRows(items)
+    } catch (err: any) {
+      setError(err?.message || 'Unable to load scores')
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
     }
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
 
   const sectors = useMemo(() => {
     const uniq = new Set<string>()
@@ -324,6 +326,25 @@ export default function Score() {
               </option>
             ))}
           </select>
+          <button
+            onClick={() => load({ refresh: true })}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--panel)] text-[var(--muted)] transition hover:text-[var(--text)]"
+            title="Refresh data from Databricks"
+            disabled={refreshing}
+          >
+            <svg
+              className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            >
+              <path d="M4 4v4h4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M16 16v-4h-4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M5.5 14.5a6 6 0 0 1 0-8.5L8 8" />
+              <path d="M14.5 5.5a6 6 0 0 1 0 8.5L12 12" />
+            </svg>
+          </button>
         </div>
       </header>
 
