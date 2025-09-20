@@ -778,7 +778,10 @@ def _generate_followups(plan: ChatPlan, rows: list[dict[str, Any]], table_payloa
             add_option(f"Compare {primary} with a peer")
             add_option(f"View vendor relationships for {primary}")
             add_option(f"Check next earnings date for {primary}")
+            add_option(f"Break down insider and events scores for {primary}")
+            add_option(f"Where do analysts target {primary}?")
         add_option("Explain scoring methodology")
+        add_option("List top names by overall score")
 
     elif dataset == "vendors":
         if primary:
@@ -966,17 +969,21 @@ def _scores_load_all(force: bool = False):
                sector,
                industry,
                px,
+               pe,
                ev_ebitda,
+               pt_consensus,
                score_fundamentals,
                score_valuation,
                score_sentiment,
                score_innovation,
                score_macro,
+               score_insider,
+               score_events,
                overall_score,
-               rank_overall
+               ROW_NUMBER() OVER (ORDER BY overall_score DESC NULLS LAST) AS rank_overall
         FROM {SCORES_TABLE}
-        WHERE rank_overall IS NOT NULL
-        ORDER BY rank_overall ASC
+        WHERE overall_score IS NOT NULL
+        ORDER BY overall_score DESC
         LIMIT {SCORES_CACHE_LIMIT}
     """
     with _db_cursor() as c:
@@ -1659,31 +1666,39 @@ SCORES_ALLOWED_COLUMNS: set[str] = {
     "sector",
     "industry",
     "px",
+    "pe",
     "ev_ebitda",
+    "pt_consensus",
     "score_fundamentals",
     "score_valuation",
     "score_sentiment",
     "score_innovation",
     "score_macro",
+    "score_insider",
+    "score_events",
     "overall_score",
     "rank_overall",
 }
 
 SCORES_NUMERIC_COLUMNS: set[str] = {
     "px",
+    "pe",
     "ev_ebitda",
+    "pt_consensus",
     "score_fundamentals",
     "score_valuation",
     "score_sentiment",
     "score_innovation",
     "score_macro",
+    "score_insider",
+    "score_events",
     "overall_score",
     "rank_overall",
 }
 
 SCORES_PERCENT_COLUMNS: set[str] = set()
 SCORES_DATE_COLUMNS: set[str] = {"as_of"}
-SCORES_CURRENCY_COLUMNS: set[str] = {"px"}
+SCORES_CURRENCY_COLUMNS: set[str] = {"px", "pt_consensus"}
 
 EARNINGS_ALLOWED_COLUMNS: set[str] = {
     "symbol",
@@ -1883,10 +1898,20 @@ COLUMN_ALIASES: dict[str, str] = {
     "52w range": "range",
     "volatility": "beta",
     "payout": "lastDividend",
+    "p/e": "pe",
+    "pe ratio": "pe",
+    "price to earnings": "pe",
+    "price target": "pt_consensus",
+    "pt consensus": "pt_consensus",
+    "consensus target": "pt_consensus",
     "value score": "score_valuation",
     "quality score": "score_fundamentals",
     "innovation": "score_innovation",
     "macro": "score_macro",
+    "insider score": "score_insider",
+    "insider": "score_insider",
+    "events score": "score_events",
+    "event score": "score_events",
     "ranking": "rank_overall",
     "position": "rank_overall",
     "score date": "as_of",
@@ -1942,12 +1967,16 @@ SCORES_LABELS: dict[str, str] = {
     "sector": "Sector",
     "industry": "Industry",
     "px": "Price",
+    "pe": "P/E",
     "ev_ebitda": "EV/EBITDA",
+    "pt_consensus": "PT Consensus",
     "score_fundamentals": "Fundamentals",
     "score_valuation": "Valuation",
     "score_sentiment": "Sentiment",
     "score_innovation": "Innovation",
     "score_macro": "Macro",
+    "score_insider": "Insider",
+    "score_events": "Events",
     "overall_score": "Overall Score",
     "rank_overall": "Rank",
 }
@@ -2084,8 +2113,8 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         percent_columns=SCORES_PERCENT_COLUMNS,
         date_columns=SCORES_DATE_COLUMNS,
         currency_columns=SCORES_CURRENCY_COLUMNS,
-        default_metrics=["overall_score", "px"],
-        default_include=["sector", "industry"],
+        default_metrics=["overall_score", "score_fundamentals", "score_insider"],
+        default_include=["sector", "industry", "px", "pe", "pt_consensus"],
         base_columns=["symbol", "as_of"],
         display_labels=SCORES_LABELS,
         ticker_column="symbol",
@@ -2191,7 +2220,11 @@ PROMPT_COLUMN_KEYWORDS: dict[str, list[tuple[tuple[str, ...], list[str]]]] = {
         (("innovation score", "innovation"), ["score_innovation"]),
         (("macro score", "macro"), ["score_macro"]),
         (("price", "share price"), ["px"]),
+        (("p/e", "price-to-earnings", "pe ratio", "price to earnings"), ["pe"]),
         (("ev/ebitda", "ev ebitda", "enterprise multiple"), ["ev_ebitda"]),
+        (("price target", "pt consensus", "consensus target"), ["pt_consensus"]),
+        (("insider score", "insider", "insider activity"), ["score_insider"]),
+        (("events score", "event score", "events"), ["score_events"]),
         (("rank", "ranking", "position"), ["rank_overall"]),
         (("as of", "score date", "last updated"), ["as_of"]),
         (("sector", "score sector"), ["sector"]),
@@ -3009,14 +3042,14 @@ def _format_value_for_summary(value: Any, col: str, config: DatasetConfig) -> Op
     return str(value)
 
 
-def _auto_summary_from_rows(plan: ChatPlan, rows: list[dict[str, Any]]) -> Optional[str]:
+def _auto_summary_from_rows(plan: ChatPlan, rows: list[dict[str, Any]], user_prompt: str) -> Optional[str]:
     if not rows:
         return None
     config = plan.config
     row = rows[0]
     dataset = plan.dataset
-    prompt_lower = plan.summary_instruction or ""
-    prompt_lower = prompt_lower.lower()
+    prompt_text = plan.summary_instruction or user_prompt or ""
+    prompt_lower = prompt_text.lower()
 
     def get(*keys: str) -> Optional[str]:
         for key in keys:
@@ -3105,16 +3138,24 @@ def _auto_summary_from_rows(plan: ChatPlan, rows: list[dict[str, Any]]) -> Optio
         fundamentals = get("score_fundamentals")
         valuation = get("score_valuation")
         sentiment = get("score_sentiment")
+        insider = get("score_insider")
+        events = get("score_events")
+        pe = get("pe")
+        pt_consensus = get("pt_consensus")
         pieces = []
         subject = name or ticker or "The company"
         if overall:
             pieces.append(f"{subject} carries an overall SmartWealth score of {overall}.")
-        if sector or price:
+        if sector or price or pe or pt_consensus:
             details = []
             if sector:
                 details.append(f"operating in {sector}")
             if price:
                 details.append(f"trading near {price}")
+            if pe and contains_any("p/e", "pe", "price-to-earnings", "valuation"):
+                details.append(f"P/E around {pe}")
+            if pt_consensus and contains_any("price target", "pt", "consensus target"):
+                details.append(f"Street target about {pt_consensus}")
             if details:
                 pieces.append(subject.split()[0] + " " + " and ".join(details) + ".")
         key_scores = []
@@ -3126,8 +3167,20 @@ def _auto_summary_from_rows(plan: ChatPlan, rows: list[dict[str, Any]]) -> Optio
             key_scores.append(f"sentiment {sentiment}")
         if innovation:
             key_scores.append(f"innovation {innovation}")
+        if insider:
+            key_scores.append(f"insider {insider}")
+        if events:
+            key_scores.append(f"events {events}")
         if key_scores:
             pieces.append("Factor profile: " + ", ".join(key_scores) + ".")
+        if not contains_any("price target", "pt", "consensus target") and pt_consensus:
+            pieces.append(f"Consensus price target sits near {pt_consensus}.")
+        if not contains_any("p/e", "pe", "price-to-earnings", "valuation") and pe:
+            pieces.append(f"Current P/E ratio is about {pe}.")
+        if not contains_any("insider") and insider and not any("insider" in k for k in key_scores):
+            pieces.append(f"Insider activity score stands at {insider}.")
+        if not contains_any("event") and events and not any("events" in k for k in key_scores):
+            pieces.append(f"Events score registers {events}.")
         if not pieces:
             return None
         return " ".join(pieces)
@@ -3501,7 +3554,7 @@ def handle_chat(user_prompt: str) -> dict[str, Any]:
     summary = _summarize_answer(user_prompt, plan, sql_raw, rows)
     display_sql = _render_sql_with_params(sql_raw, sql_params)
 
-    auto_summary = _auto_summary_from_rows(plan, rows)
+    auto_summary = _auto_summary_from_rows(plan, rows, user_prompt)
     if auto_summary and _summary_is_generic(summary):
         summary = auto_summary
 

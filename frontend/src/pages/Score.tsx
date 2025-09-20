@@ -9,12 +9,16 @@ type ScoreRow = {
   sector?: string
   industry?: string
   px?: number
+  pe?: number
   ev_ebitda?: number
+  pt_consensus?: number
   score_fundamentals?: number
   score_valuation?: number
   score_sentiment?: number
   score_innovation?: number
   score_macro?: number
+  score_insider?: number
+  score_events?: number
   overall_score?: number
   rank_overall?: number
 }
@@ -25,6 +29,8 @@ const SCORE_KEYS: Array<{ key: keyof ScoreRow; label: string; accent: string }> 
   { key: 'score_sentiment', label: 'Sentiment', accent: 'from-[#9b8cff] to-[#5f4bde]' },
   { key: 'score_innovation', label: 'Innovation', accent: 'from-[#ff9add] to-[#ff5fa6]' },
   { key: 'score_macro', label: 'Macro', accent: 'from-[#7cf0ff] to-[#3bb0ff]' },
+  { key: 'score_insider', label: 'Insider', accent: 'from-[#ffd6a5] to-[#ff924c]' },
+  { key: 'score_events', label: 'Events', accent: 'from-[#c8b5ff] to-[#7d5fff]' },
 ]
 
 function formatPct(val?: number) {
@@ -35,6 +41,15 @@ function formatPct(val?: number) {
 function formatNumber(val?: number, digits = 2) {
   if (val == null || Number.isNaN(val)) return '—'
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(val)
+}
+
+function formatCurrency(val?: number, digits = 2) {
+  if (val == null || Number.isNaN(val)) return '—'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: digits,
+  }).format(val)
 }
 
 function ScoreBar({ value, label, accent }: { value?: number; label: string; accent: string }) {
@@ -55,6 +70,11 @@ function ScoreBar({ value, label, accent }: { value?: number; label: string; acc
 function ScoreCard({ row }: { row: ScoreRow }) {
   const symbol = row.symbol || '—'
   const rank = row.rank_overall ?? '—'
+  const valuationItems = [
+    row.ev_ebitda != null ? `EV/EBITDA ${formatNumber(row.ev_ebitda, 1)}` : null,
+    row.pe != null ? `P/E ${formatNumber(row.pe, 1)}` : null,
+    row.pt_consensus != null ? `PT ${formatCurrency(row.pt_consensus, 0)}` : null,
+  ].filter(Boolean) as string[]
 
   return (
     <motion.article
@@ -83,8 +103,21 @@ function ScoreCard({ row }: { row: ScoreRow }) {
         <div className="text-right">
           <div className="text-xs uppercase tracking-wide text-[var(--muted)]">Symbol</div>
           <div className="text-2xl font-extrabold">{symbol}</div>
-          <div className="mt-2 rounded-xl border border-[var(--border)]/60 bg-black/10 px-3 py-1 text-xs text-[var(--muted)]">
-            Px ${formatNumber(row.px, 2)} • EV/EBITDA {formatNumber(row.ev_ebitda, 1)}
+          <div className="mt-2 grid gap-1 text-[11px] text-[var(--muted)]">
+            <div className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)]/60 bg-black/10 px-3 py-1">
+              <span className="font-semibold text-[var(--text)]">Price</span>
+              <span>${formatNumber(row.px, 2)}</span>
+            </div>
+            {valuationItems.length ? (
+              <div className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)]/50 bg-black/5 px-3 py-1">
+                {valuationItems.map((item, idx) => (
+                  <React.Fragment key={idx}>
+                    <span>{item}</span>
+                    {idx < valuationItems.length - 1 ? <span>•</span> : null}
+                  </React.Fragment>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -128,7 +161,11 @@ export default function Score() {
       try {
         const { data } = await api.get('scores/ranked')
         if (!mounted) return
-        setRows(data.items || [])
+        const items: ScoreRow[] = (data.items || []).map((row: ScoreRow, idx: number) => ({
+          ...row,
+          rank_overall: row.rank_overall ?? idx + 1,
+        }))
+        setRows(items)
       } catch (err: any) {
         if (mounted) setError(err?.message || 'Unable to load scores')
       } finally {
