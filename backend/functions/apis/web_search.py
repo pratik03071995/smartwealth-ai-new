@@ -251,7 +251,7 @@ def extract_stock_price_from_results(results: List[Dict[str, Any]]) -> str:
 
 def format_search_results(results: List[Dict[str, Any]], max_results: int = 3, query: str = "") -> str:
     """
-    Format search results using intelligent web scraping and financial APIs.
+    Format search results using LLM for intelligent response generation.
     
     Args:
         results: List of search results
@@ -259,16 +259,15 @@ def format_search_results(results: List[Dict[str, Any]], max_results: int = 3, q
         query: Original user query for context
     
     Returns:
-        Intelligently formatted response with real-time data
+        LLM-generated response based on search results
     """
     if not results:
         return "I couldn't find any recent information on that topic."
     
-    # Use intelligent web scraping for better data extraction
+    # Check if this is a stock price query (only for explicit price requests)
     if query:
-        # Check if this is a stock price query
         query_lower = query.lower()
-        if any(keyword in query_lower for keyword in ['stock price', 'current price', 'price', 'tesla', 'apple', 'microsoft', 'google', 'amazon']):
+        if any(keyword in query_lower for keyword in ['stock price', 'current price', 'price', 'trading price', 'share price']):
             # Try to extract stock symbol from query
             symbol = _extract_symbol_from_query(query)
             if symbol:
@@ -279,26 +278,10 @@ def format_search_results(results: List[Dict[str, Any]], max_results: int = 3, q
                         return format_stock_price_response(stock_data)
                 except Exception as exc:
                     logger.error(f"Financial API failed: {exc}")
-        
-            # Use basic search result formatting
-            return _format_basic_search_results(results, query)
+                    # Fall back to LLM-based search results
     
-    # Fallback to basic formatting
-    formatted_results = []
-    for i, result in enumerate(results[:max_results], 1):
-        title = result.get("title", "No title")
-        snippet = result.get("snippet", "No description available")
-        
-        # Truncate snippet if too long
-        if len(snippet) > 150:
-            snippet = snippet[:150] + "..."
-        
-        formatted_results.append(
-            f"**{i}. {title}**\n"
-            f"{snippet}\n"
-        )
-    
-    return "\n".join(formatted_results)
+    # Use LLM-based formatting for all cases
+    return _format_basic_search_results(results, query)
 
 def _extract_symbol_from_query(query: str) -> Optional[str]:
     """
@@ -352,33 +335,67 @@ def _extract_symbol_from_query(query: str) -> Optional[str]:
 
 def _format_basic_search_results(results: List[Dict[str, Any]], query: str) -> str:
     """
-    Format search results in a basic way.
+    Format search results using LLM for intelligent response generation.
     
     Args:
         results: List of search results
         query: Original user query
     
     Returns:
-        Formatted response string
+        LLM-generated response based on search results
     """
     if not results:
         return "I couldn't find any recent information on that topic."
     
-    formatted_results = []
+    # Prepare search results for LLM processing
+    search_context = []
     for i, result in enumerate(results[:3], 1):
         title = result.get("title", "No title")
-        snippet = result.get("snippet", "No description available")
+        snippet = result.get("snippet", "No description")
+        url = result.get("url", "")
         
-        # Truncate snippet if too long
-        if len(snippet) > 150:
-            snippet = snippet[:150] + "..."
-        
-        formatted_results.append(
-            f"**{i}. {title}**\n"
-            f"{snippet}\n"
-        )
+        search_context.append(f"Result {i}: {title}\n{snippet}\nURL: {url}\n")
     
-    return "\n".join(formatted_results)
+    # Create LLM prompt for intelligent response generation
+    llm_prompt = f"""
+    Based on the following search results, provide a direct, accurate answer to the user's question: "{query}"
+
+    Search Results:
+    {''.join(search_context)}
+
+    Instructions:
+    1. ALWAYS start your response with "Based on the search results"
+    2. Analyze the search results to find the most relevant information
+    3. Provide a direct, concise answer that directly addresses the user's question
+    4. If the question asks for a specific fact (like CEO name, location, etc.), extract that specific information
+    5. Keep the response clean and professional
+    6. If you cannot find a direct answer, say "Based on the search results, I couldn't find a specific answer to your question."
+
+    Answer:
+    """
+    
+    try:
+        # Import LLM function locally to avoid circular imports
+        from .chat import _llm_chat
+        
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant that provides direct, accurate answers based on search results. Always be concise and directly answer the user's question."},
+            {"role": "user", "content": llm_prompt}
+        ]
+        
+        llm_response = _llm_chat(messages)
+        return llm_response.strip()
+        
+    except Exception as exc:
+        # Fallback to basic formatting if LLM fails
+        first_result = results[0]
+        snippet = first_result.get("snippet", "")
+        if snippet and len(snippet) > 50:
+            if len(snippet) > 200:
+                snippet = snippet[:200] + "..."
+            return snippet
+        
+        return "I found some information but couldn't provide a direct answer to your question."
 
 def enhance_query_with_context(query: str, context: Dict[str, Any]) -> str:
     """
