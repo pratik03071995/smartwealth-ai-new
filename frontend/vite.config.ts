@@ -12,7 +12,14 @@ export default defineConfig({
       '454c8ca24be4.ngrok-free.app',
       '69e3ac673021.ngrok-free.app',
       '.ngrok-free.app'
-    ]
+    ],
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      }
+    }
   },
   define: {
     global: 'globalThis',

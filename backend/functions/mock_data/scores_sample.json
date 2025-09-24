@@ -1,0 +1,47 @@
+[
+  {
+    "symbol": "AAPL",
+    "as_of": "2025-01-10",
+    "sector": "Technology",
+    "industry": "Consumer Electronics",
+    "px": 192.32,
+    "ev_ebitda": 18.4,
+    "score_fundamentals": 82.5,
+    "score_valuation": 68.0,
+    "score_sentiment": 74.2,
+    "score_innovation": 91.3,
+    "score_macro": 66.8,
+    "overall_score": 79.6,
+    "rank_overall": 5
+  },
+  {
+    "symbol": "AMZN",
+    "as_of": "2025-01-10",
+    "sector": "Consumer Cyclical",
+    "industry": "Internet Retail",
+    "px": 178.65,
+    "ev_ebitda": 22.1,
+    "score_fundamentals": 76.4,
+    "score_valuation": 62.3,
+    "score_sentiment": 81.5,
+    "score_innovation": 88.9,
+    "score_macro": 71.0,
+    "overall_score": 76.8,
+    "rank_overall": 12
+  },
+  {
+    "symbol": "GOOGL",
+    "as_of": "2025-01-10",
+    "sector": "Communication Services",
+    "industry": "Internet Content & Information",
+    "px": 142.11,
+    "ev_ebitda": 16.2,
+    "score_fundamentals": 80.1,
+    "score_valuation": 70.5,
+    "score_sentiment": 72.4,
+    "score_innovation": 86.2,
+    "score_macro": 69.5,
+    "overall_score": 77.4,
+    "rank_overall": 9
+  }
+]
