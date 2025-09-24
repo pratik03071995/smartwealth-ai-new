@@ -103,6 +103,7 @@ temp/
 # SmartWealth specific
 user_profiles/
 *.jsonl
+*.json
 backend.log
 backend.pid
 chat_feedback.jsonl
