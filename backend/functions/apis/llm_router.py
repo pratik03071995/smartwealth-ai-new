@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any, Dict, Tuple
 
-from .chat import _llm_chat
+# Import moved to avoid circular dependency
 
 logger = logging.getLogger("smartwealth.llm_router")
 
@@ -24,16 +24,20 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
 
     User Query: "{user_prompt}"
 
-    IMPORTANT RULES:
+    CRITICAL RULES - READ CAREFULLY:
     1. If the query asks for STOCK PRICE, CURRENT PRICE, or REAL-TIME QUOTES → use "web_search" with "financial_api"
     2. If the query asks for NEWS, LATEST UPDATES, or RECENT INFORMATION → use "web_search" with "web_search"  
     3. If the query asks for ANALYTICAL DATA, SECTOR ANALYSIS, COMPARISONS, or DATABASE QUERIES → use "database_search"
-    4. For stock price queries, extract the ticker symbol if mentioned
+    4. If the query asks for FACTUAL INFORMATION (CEO, company info, general facts, "who is", "what is") → use "web_search" with "web_search"
+    5. For stock price queries ONLY, extract the ticker symbol if mentioned
+    6. DO NOT use financial_api for factual questions about companies
 
     Examples:
     - "What is the stock price of AAPL?" → web_search, financial_api, symbol: AAPL
     - "AAL stock price" → web_search, financial_api, symbol: AAL  
     - "Latest news about Tesla" → web_search, web_search
+    - "Who is the CEO of Amazon?" → web_search, web_search, intent: factual
+    - "What is Apple's headquarters?" → web_search, web_search, intent: factual
     - "Compare Apple and Microsoft earnings" → database_search
     - "Top performing sectors" → database_search
 
@@ -42,7 +46,7 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
         "strategy": "web_search" or "database_search",
         "reason": "brief explanation",
         "search_type": "financial_api" or "web_search" or "databricks",
-        "intent": "stock_price" or "news" or "analysis" or "comparison",
+        "intent": "stock_price" or "news" or "analysis" or "comparison" or "factual",
         "symbol": "ticker if extracted" or null,
         "confidence": 0.0-1.0
     }}
@@ -54,6 +58,8 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
             {"role": "user", "content": analysis_prompt}
         ]
         
+        # Import here to avoid circular dependency
+        from .chat import _llm_chat
         llm_response = _llm_chat(messages)
         
         # Parse LLM response
@@ -76,6 +82,7 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
             return _fallback_heuristic_routing(user_prompt)
         
         logger.info(f"LLM routing: '{user_prompt}' -> {analysis['strategy']} ({analysis['reason']})")
+        logger.info(f"LLM analysis details: {analysis}")
         return analysis['strategy'], analysis
         
     except Exception as exc:
