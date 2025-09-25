@@ -358,18 +358,18 @@ def _format_basic_search_results(results: List[Dict[str, Any]], query: str) -> s
     
     # Create LLM prompt for intelligent response generation
     llm_prompt = f"""
-    Based on the following search results, provide a direct, accurate answer to the user's question: "{query}"
+    Provide a direct, accurate answer to the user's question: "{query}"
 
     Search Results:
     {''.join(search_context)}
 
     Instructions:
-    1. ALWAYS start your response with "Based on the search results"
-    2. Analyze the search results to find the most relevant information
-    3. Provide a direct, concise answer that directly addresses the user's question
-    4. If the question asks for a specific fact (like CEO name, location, etc.), extract that specific information
-    5. Keep the response clean and professional
-    6. If you cannot find a direct answer, say "Based on the search results, I couldn't find a specific answer to your question."
+    1. Analyze the search results to find the most relevant information
+    2. Provide a direct, concise answer that directly addresses the user's question
+    3. If the question asks for a specific fact (like CEO name, location, etc.), extract that specific information
+    4. Keep the response clean and professional
+    5. Do NOT start with "Based on the search results" or any similar phrases
+    6. If you cannot find a direct answer, say "I couldn't find a specific answer to your question."
 
     Answer:
     """
