@@ -8,9 +8,11 @@ from .chat import (
     ChatPlan, _heuristic_plan_data, _augment_plan_with_prompt, _fetch_rows,
     _summarize_answer, _render_sql_with_params, _build_table_payload,
     _build_chart_payload, _prepare_preview_rows, _generate_followups,
-    logger, CHAT_FEEDBACK_STATUS_PENDING
+    logger, CHAT_FEEDBACK_STATUS_PENDING, reset_llm_provider,
+    get_llm_source_label, get_last_llm_provider, build_source_label
 )
 from .feedback import log_chat_interaction
+from .web_search import SEARCH_PROVIDER
 
 def finalize_response(
     resp: dict[str, Any],
@@ -31,6 +33,11 @@ def finalize_response(
     chart_data = chart_payload if chart_payload is not None else resp.get("chart")
     sql_text = resp.get("sql") or resp.get("sql_raw")
     latency_ms = resp.get("latencyMs")
+
+    llm_label = get_llm_source_label()
+    resp.setdefault("llmSource", llm_label)
+    resp.setdefault("llmSourceRaw", get_last_llm_provider())
+    resp["sourceLabel"] = build_source_label(resp.get("data_source"), resp.get("search_provider"), llm_label)
     
     if followups is None:
         followups = resp.get("followups") if isinstance(resp.get("followups"), list) else None
@@ -62,6 +69,7 @@ def handle_chat_clean(user_prompt: str) -> dict[str, Any]:
     Returns:
         Chat response
     """
+    reset_llm_provider()
     # Step 1: Route the query to determine search strategy
     strategy, analysis = route_query(user_prompt)
     logger.info(f"Query routing: '{user_prompt}' -> {strategy}")
@@ -86,7 +94,7 @@ def _handle_web_search_query(user_prompt: str, analysis: Dict[str, Any]) -> dict
     try:
         # For stock price queries, use financial API directly
         if analysis.get('search_type') == 'financial_api' or any(keyword in user_prompt.lower() for keyword in ['stock price', 'price', 'current price', 'quote']):
-            from .financial_api import get_stock_price, format_stock_price_response
+            from .financial_api import get_stock_price
             from .web_search import _extract_symbol_from_query
             from .response_enhancer import enhance_financial_response_with_ollama
             
@@ -94,29 +102,37 @@ def _handle_web_search_query(user_prompt: str, analysis: Dict[str, Any]) -> dict
             if symbol:
                 stock_data = get_stock_price(symbol)
                 if stock_data:
-                    # Use Ollama to enhance the response
+                    # Use the configured LLM to enhance the response
                     response = enhance_financial_response_with_ollama(stock_data, user_prompt)
                     return finalize_response({
                         "reply": response,
                         "web_search": True,
-                        "data_source": "financial_api_enhanced"
+                        "data_source": "financial_api_enhanced",
+                        "search_provider": "Financial API"
                     })
                 else:
                     # If financial API fails, try web search
                     from .web_search import search_web, format_search_results
                     web_results = search_web(f"{symbol} stock price current", num_results=3)
+                    provider_label = None
+                    if web_results:
+                        provider_label = web_results[0].get("source")
+                    if not provider_label:
+                        provider_label = SEARCH_PROVIDER.title()
                     if web_results:
                         response = format_search_results(web_results, query=user_prompt)
                         return finalize_response({
                             "reply": response,
                             "web_search": True,
-                            "data_source": "web_search"
+                            "data_source": "web_search",
+                            "search_provider": provider_label
                         })
                     else:
                         return finalize_response({
                             "reply": f"I couldn't find current stock price information for {symbol}. Please try again or check a financial website.",
                             "web_search": True,
-                            "data_source": "error"
+                            "data_source": "error",
+                            "search_provider": provider_label
                         })
             else:
                 # Extract symbol from the query more aggressively
@@ -131,7 +147,8 @@ def _handle_web_search_query(user_prompt: str, analysis: Dict[str, Any]) -> dict
                         return finalize_response({
                             "reply": response,
                             "web_search": True,
-                            "data_source": "financial_api_enhanced"
+                            "data_source": "financial_api_enhanced",
+                            "search_provider": "Financial API"
                         })
                 
                 return finalize_response({
@@ -142,20 +159,28 @@ def _handle_web_search_query(user_prompt: str, analysis: Dict[str, Any]) -> dict
         
         # For other web searches, use web search API
         from .web_search import search_web, format_search_results
-        
+
         web_search_results = search_web(user_prompt, num_results=5)
+        provider_label = None
+        if web_search_results:
+            provider_label = web_search_results[0].get("source")
+        if not provider_label:
+            provider_label = SEARCH_PROVIDER.title()
         if web_search_results:
             response = format_search_results(web_search_results, query=user_prompt)
             return finalize_response({
                 "reply": response,
                 "web_search": True,
-                "data_source": "web_search"
+                "data_source": "web_search",
+                "search_provider": provider_label
             })
-        
+
         # Fallback if web search fails
         return finalize_response({
             "reply": "I couldn't find current information on that topic. Please try again later.",
-            "web_search": True
+            "web_search": True,
+            "data_source": "web_search",
+            "search_provider": provider_label
         })
         
     except Exception as exc:
@@ -212,7 +237,7 @@ def _handle_database_query(user_prompt: str, analysis: Dict[str, Any]) -> dict[s
     summary = _summarize_answer(user_prompt, plan, sql_raw, rows)
     display_sql = _render_sql_with_params(sql_raw, sql_params)
     
-    # Enhance database response with Ollama for natural language
+    # Enhance database response with the configured LLM for natural language
     from .response_enhancer import enhance_database_response_with_ollama
     summary = enhance_database_response_with_ollama(summary, user_prompt)
 

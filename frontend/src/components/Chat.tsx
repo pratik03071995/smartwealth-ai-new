@@ -96,6 +96,11 @@ type AssistantMsg = {
   plan?: Record<string, unknown> | null
   followups?: string[] | null
   tablePreview?: Record<string, unknown>[] | null
+  sourceLabel?: string | null
+  dataSource?: string | null
+  llmSource?: string | null
+  llmSourceRaw?: string | null
+  searchProvider?: string | null
 }
 
 type UserMsg = { role: 'user'; text: string }
@@ -473,6 +478,11 @@ export default function Chat() {
       const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       const latencyMs = Math.max(0, endedAt - startedAt)
       const assistantId = (data?.messageId as string) || createMessageId()
+      const sourceLabel = (data?.sourceLabel as string | undefined) ?? null
+      const dataSource = (data?.data_source as string | undefined) ?? null
+      const llmSource = (data?.llmSource as string | undefined) ?? null
+      const llmSourceRaw = (data?.llmSourceRaw as string | undefined) ?? null
+      const searchProvider = (data?.search_provider as string | undefined) ?? null
       const assistant: AssistantMsg = {
         role: 'assistant',
         text: data?.reply || 'I could not craft a response for that.',
@@ -486,6 +496,11 @@ export default function Chat() {
         plan: data?.plan ?? null,
         followups: (data?.followups as string[] | undefined) ?? null,
         tablePreview: (data?.tablePreview as Record<string, unknown>[] | undefined) ?? null,
+        sourceLabel,
+        dataSource,
+        llmSource,
+        llmSourceRaw,
+        searchProvider,
       }
       setMessages((m) => [...m, assistant])
     } catch (err) {
@@ -547,6 +562,11 @@ export default function Chat() {
               <div className="text-[10px] uppercase tracking-widest text-[var(--muted)]">{m.role}</div>
               <div className="mt-1 space-y-3 leading-relaxed">
                 <div>{m.text}</div>
+                {isAssistant(m) && m.sourceLabel ? (
+                  <div className="text-[8px] uppercase tracking-[0.28em] text-[var(--muted)] opacity-80">
+                    {m.sourceLabel}
+                  </div>
+                ) : null}
                 {renderTableSection(m)}
                 {isAssistant(m) && m.chart?.data?.length ? (
                   <button

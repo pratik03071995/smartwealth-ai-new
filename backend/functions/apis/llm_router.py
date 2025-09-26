@@ -1,8 +1,9 @@
-"""LLM-based query routing using Ollama for intelligent decision making."""
+"""LLM-based query routing prioritizing DeepSeek with Ollama fallback."""
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, Tuple
 
 # Import moved to avoid circular dependency
@@ -59,26 +60,33 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
         ]
         
         # Import here to avoid circular dependency
-        from .chat import _llm_chat
+        from .chat import _llm_chat, record_llm_provider
         llm_response = _llm_chat(messages)
         
         # Parse LLM response
         try:
-            analysis = json.loads(llm_response.strip())
+            raw = llm_response.strip()
+            if raw.startswith("```"):
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw)
+            analysis = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning(f"Failed to parse LLM response as JSON: {llm_response}")
             # Fallback to heuristic routing
+            record_llm_provider("heuristic")
             return _fallback_heuristic_routing(user_prompt)
         
         # Validate required fields
         required_fields = ['strategy', 'reason', 'search_type', 'intent']
         if not all(field in analysis for field in required_fields):
             logger.warning(f"LLM response missing required fields: {analysis}")
+            record_llm_provider("heuristic")
             return _fallback_heuristic_routing(user_prompt)
         
         # Ensure strategy is valid
         if analysis['strategy'] not in ['web_search', 'database_search']:
             logger.warning(f"Invalid strategy from LLM: {analysis['strategy']}")
+            record_llm_provider("heuristic")
             return _fallback_heuristic_routing(user_prompt)
         
         logger.info(f"LLM routing: '{user_prompt}' -> {analysis['strategy']} ({analysis['reason']})")
@@ -87,10 +95,15 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
         
     except Exception as exc:
         logger.error(f"LLM routing failed: {exc}")
+        from .chat import record_llm_provider
+        record_llm_provider("heuristic")
         return _fallback_heuristic_routing(user_prompt)
 
 def _fallback_heuristic_routing(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
     """Fallback to heuristic routing when LLM fails."""
+    from .chat import record_llm_provider
+
+    record_llm_provider("heuristic")
     prompt_lower = user_prompt.lower()
     
     # Stock price keywords

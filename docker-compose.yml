@@ -7,6 +7,11 @@ services:
       dockerfile: backend/Dockerfile
     env_file:
       - backend/.env
+    environment:
+      OLLAMA_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_FALLBACK_BASE_URL: ${DOCKER_OLLAMA_FALLBACK_BASE_URL:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

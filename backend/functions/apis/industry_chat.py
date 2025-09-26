@@ -12,7 +12,8 @@ from .chat import ( # Import necessary functions from original chat for data fet
     ChatPlan, _heuristic_plan_data, _augment_plan_with_prompt, _fetch_rows,
     _summarize_answer, _render_sql_with_params, _build_table_payload,
     _build_chart_payload, _prepare_preview_rows, _generate_followups,
-    logger, CHAT_FEEDBACK_STATUS_PENDING
+    logger, CHAT_FEEDBACK_STATUS_PENDING, reset_llm_provider,
+    get_llm_source_label, get_last_llm_provider, build_source_label
 )
 from .conversation_manager import conversation_manager
 from .error_handler import handle_error_gracefully, categorize_error
@@ -23,7 +24,7 @@ from .personalization import personalization_engine
 from .response_enhancer import enhance_database_response_with_ollama, enhance_financial_response_with_ollama
 from .security import rate_limiter, sanitize_input
 from .translation import detect_language, translate_text, get_localized_response
-from .web_search import search_web, format_search_results, _extract_symbol_from_query
+from .web_search import search_web, format_search_results, _extract_symbol_from_query, SEARCH_PROVIDER
 
 
 def finalize_response_industry(
@@ -48,11 +49,18 @@ def finalize_response_industry(
     message_id = resp.get("messageId") or str(uuid.uuid4())
     resp["messageId"] = message_id
     resp["status"] = status
-    
+    resp.setdefault("data_source", data_source)
+
     table_data = table_payload if table_payload is not None else resp.get("table")
     chart_data = chart_payload if chart_payload is not None else resp.get("chart")
     sql_text = sql_raw if sql_raw is not None else resp.get("sql")
-    
+
+    llm_label = get_llm_source_label()
+    resp.setdefault("llmSource", llm_label)
+    resp.setdefault("llmSourceRaw", get_last_llm_provider())
+    resp.setdefault("search_provider", resp.get("search_provider"))
+    resp["sourceLabel"] = build_source_label(resp.get("data_source"), resp.get("search_provider"), llm_label)
+
     if followups is None:
         followups = resp.get("followups") if isinstance(resp.get("followups"), list) else None
     
@@ -116,10 +124,11 @@ def handle_chat_industry(user_prompt: str, user_id: str = "anonymous", session_i
     """
     if not session_id:
         session_id = str(uuid.uuid4())
-    
+
     start_time = time.time()
-    
+
     try:
+        reset_llm_provider()
         # Security: Rate limiting and input sanitization
         client_ip = request.remote_addr if request else "unknown"
         if not rate_limiter.check_request(client_ip):
@@ -207,18 +216,24 @@ def _handle_web_search_industry(user_prompt: str, analysis: Dict[str, Any], user
             symbol = analysis['symbol']
             stock_data = get_stock_price(symbol)
             if stock_data:
-                # Use Ollama to enhance the response
+                # Use the configured LLM to enhance the response
                 response = enhance_financial_response_with_ollama(stock_data, user_prompt)
                 return {
                     "reply": response,
                     "web_search": True,
                     "data_source": "financial_api_enhanced",
+                    "search_provider": "Financial API",
                     "messageId": message_id,
                 }
         
         # Fallback to general web search
         enhanced_query = enhance_query_with_context(user_prompt, analysis)
         web_search_results = search_web(enhanced_query, num_results=5, intent=analysis.get('search_type', 'general'))
+        provider_label = None
+        if web_search_results:
+            provider_label = web_search_results[0].get("source")
+        if not provider_label:
+            provider_label = SEARCH_PROVIDER.title()
         
         if web_search_results:
             web_response = format_search_results(web_search_results, query=user_prompt)
@@ -226,6 +241,7 @@ def _handle_web_search_industry(user_prompt: str, analysis: Dict[str, Any], user
                 "reply": web_response,
                 "web_search": True,
                 "data_source": "web_search",
+                "search_provider": provider_label,
                 "messageId": message_id,
             }
         else:
@@ -233,12 +249,15 @@ def _handle_web_search_industry(user_prompt: str, analysis: Dict[str, Any], user
                 "reply": "I couldn't find any relevant information on the web for that query.",
                 "web_search": True,
                 "data_source": "web_search",
+                "search_provider": provider_label,
                 "messageId": message_id,
             }
     except Exception as exc:
         logger.error(f"Web search handler failed: {exc}")
         return {
             "reply": "I ran into an unexpected issue answering that. Please try again shortly.",
+            "data_source": "error",
+            "search_provider": provider_label if 'provider_label' in locals() else SEARCH_PROVIDER.title(),
             "messageId": message_id,
         }
 
@@ -294,7 +313,7 @@ def _handle_database_industry(user_prompt: str, analysis: Dict[str, Any], user_i
     summary = _summarize_answer(user_prompt, plan, sql_raw, rows)
     display_sql = _render_sql_with_params(sql_raw, sql_params)
     
-    # Enhance database response with Ollama for natural language
+    # Enhance database response with the configured LLM for natural language
     summary = enhance_database_response_with_ollama(summary, user_prompt)
 
     response: dict[str, Any] = {

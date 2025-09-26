@@ -1,4 +1,4 @@
-"""Response enhancement using Ollama for natural language generation."""
+"""Response enhancement using the configured LLM for natural language."""
 from __future__ import annotations
 
 import logging
@@ -10,7 +10,7 @@ logger = logging.getLogger("smartwealth.response_enhancer")
 
 def enhance_database_response_with_ollama(response: str, user_prompt: str) -> str:
     """
-    Enhance database response using Ollama for more natural language.
+    Enhance database responses using the configured LLM for natural language output.
     
     Args:
         response: Original database response
@@ -36,7 +36,7 @@ def enhance_database_response_with_ollama(response: str, user_prompt: str) -> st
         ]
         
         enhanced_response = _llm_chat(messages)
-        logger.info("Enhanced database response with Ollama")
+        logger.info("Enhanced database response with LLM")
         return enhanced_response
         
     except Exception as exc:
@@ -45,7 +45,7 @@ def enhance_database_response_with_ollama(response: str, user_prompt: str) -> st
 
 def enhance_financial_response_with_ollama(stock_data: Dict[str, Any], user_prompt: str) -> str:
     """
-    Enhance financial API response using Ollama for better formatting.
+    Enhance financial API responses using the configured LLM for better formatting.
     
     Args:
         stock_data: Stock data from financial API
@@ -80,7 +80,7 @@ def enhance_financial_response_with_ollama(stock_data: Dict[str, Any], user_prom
         ]
         
         enhanced_response = _llm_chat(messages)
-        logger.info("Enhanced financial response with Ollama")
+        logger.info("Enhanced financial response with LLM")
         return enhanced_response
         
     except Exception as exc:
@@ -90,7 +90,7 @@ def enhance_financial_response_with_ollama(stock_data: Dict[str, Any], user_prom
 
 def enhance_web_search_response_with_ollama(search_results: List[Dict[str, Any]], user_prompt: str) -> str:
     """
-    Enhance web search results using Ollama for better summarization.
+    Enhance web search results using the configured LLM for better summarization.
     
     Args:
         search_results: Web search results
@@ -123,7 +123,7 @@ def enhance_web_search_response_with_ollama(search_results: List[Dict[str, Any]]
         ]
         
         enhanced_response = _llm_chat(messages)
-        logger.info("Enhanced web search response with Ollama")
+        logger.info("Enhanced web search response with LLM")
         return enhanced_response
         
     except Exception as exc:
@@ -135,7 +135,7 @@ def enhance_web_search_response_with_ollama(search_results: List[Dict[str, Any]]
 
 def create_conversational_response(data: Any, user_prompt: str, response_type: str = "general") -> str:
     """
-    Create conversational responses using Ollama based on data type.
+    Create conversational responses using the configured LLM based on data type.
     
     Args:
         data: Response data
