@@ -1,4 +1,4 @@
-"""Advanced analytics and monitoring for chatbot performance and usage."""
+"""advanced analytics and monitoring for chatbot performance and usage."""
 from __future__ import annotations
 
 import logging
