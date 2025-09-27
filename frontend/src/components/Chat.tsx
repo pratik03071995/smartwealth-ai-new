@@ -564,7 +564,31 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                   m.role === 'assistant' ? 'justify-start' : 'justify-end'
                 }`}
               >
-                <span>{m.role === 'assistant' ? 'Assistant' : 'You'}</span>
+                {m.role === 'assistant' ? (
+                  <span className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/60 bg-white/90 px-2.5 py-1 text-[var(--brand2)] shadow-[0_10px_24px_rgba(123,91,251,0.15)]">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-[var(--brand2)] to-[var(--brand1)] text-white">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path
+                          d="M12 3c-3.87 0-7 2.92-7 6.52 0 2.26 1.52 4.28 3.9 5.24L8 20l4-2 4 2-.9-5.24c2.38-.96 3.9-2.98 3.9-5.24C19 5.92 15.87 3 12 3Z"
+                          stroke="white"
+                          strokeWidth="1.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path d="M9.5 9.75h5" stroke="white" strokeWidth="1.2" strokeLinecap="round" />
+                        <path d="M9.5 12.25h5" stroke="white" strokeWidth="1.2" strokeLinecap="round" />
+                        <circle cx="9" cy="8.5" r="0.7" fill="white" />
+                        <circle cx="15" cy="8.5" r="0.7" fill="white" />
+                      </svg>
+                    </span>
+                    <span className="text-[0.62rem] tracking-[0.32em] text-[var(--muted)]">AI</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/80 px-2.5 py-1 text-[0.62rem] tracking-[0.32em] text-[var(--muted)]">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--panel)] text-[var(--muted)]">■</span>
+                    <span>You</span>
+                  </span>
+                )}
               </div>
               <div className={`mt-2 space-y-3 leading-relaxed ${m.role === 'user' ? 'text-right' : ''}`}>
                 <div className="text-[var(--text)] opacity-90">{m.text}</div>
