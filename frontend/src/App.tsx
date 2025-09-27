@@ -1,7 +1,6 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
-import { createPortal } from 'react-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 
 function useThemeBoot() {
   const getInitial = () => {
@@ -15,42 +14,99 @@ function useThemeBoot() {
   }, [theme])
 }
 
-const NAV_TOP: Array<{ to: string; label: string }> = [
-  { to: '/',          label: 'Chat'     },
-  { to: '/calendar',  label: 'Calendar' },
-  { to: '/sectors',   label: 'Sectors'  },
-]
+type NavKey = 'chat' | 'calendar' | 'insights'
 
-const NAV_DROPDOWNS: Record<string, Array<{ label: string; href?: string; disabled?: boolean }>> = {
-  Calendar: [
-    { label: 'Earnings Calendar', href: '/earnings' },
-    { label: 'IPO Calendar', disabled: true },
-    { label: 'Dividend Calendar', disabled: true },
-  ],
-  Sectors: [
-    { label: 'Scoring', href: '/score' },
-    { label: 'Vendors', href: '/vendors' },
-    { label: 'Company Info', href: '/company-info' },
-  ],
+type DropdownLink = {
+  label: string
+  to: string
+  disabled?: boolean
+  description?: string
 }
+
+type NavItem = {
+  key: NavKey
+  label: string
+  to: string
+  match: (path: string) => boolean
+  dropdown?: DropdownLink[]
+}
+
+const matchPath = (path: string, patterns: string[]) =>
+  patterns.some((pattern) => {
+    if (pattern === '/') return path === '/'
+    return path === pattern || path.startsWith(`${pattern}/`)
+  })
+
+const NAV_ITEMS: NavItem[] = [
+  {
+    key: 'chat',
+    label: 'Chat',
+    to: '/',
+    match: (path) => matchPath(path, ['/']),
+  },
+  {
+    key: 'calendar',
+    label: 'Calendar',
+    to: '/earnings',
+    match: (path) => matchPath(path, ['/earnings']),
+    dropdown: [
+      { label: 'Earnings Calendar', to: '/earnings' },
+      { label: 'IPO Calendar', to: '', disabled: true },
+      { label: 'Dividend Calendar', to: '', disabled: true },
+    ],
+  },
+  {
+    key: 'insights',
+    label: 'Insights',
+    to: '/sectors',
+    match: (path) => matchPath(path, ['/sectors', '/score', '/vendors', '/company-info']),
+    dropdown: [
+      { label: 'Scoring', to: '/score' },
+      { label: 'Vendors', to: '/vendors' },
+      { label: 'Company Info', to: '/company-info' },
+    ],
+  },
+]
 
 export default function App() {
   useThemeBoot()
   const location = useLocation()
   const navigate = useNavigate()
+  const activeItem = useMemo(() => NAV_ITEMS.find((item) => item.match(location.pathname)) ?? NAV_ITEMS[0], [location.pathname])
+  const [openDropdown, setOpenDropdown] = React.useState<NavKey | null>(null)
+  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false)
+  const [mobileExpanded, setMobileExpanded] = React.useState<NavKey | null>(null)
+  const navRef = React.useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const idx = Number(e.key) - 1
-      if (idx >= 0 && idx < NAV_TOP.length) {
+      if (!Number.isNaN(idx) && idx >= 0 && idx < NAV_ITEMS.length) {
         e.preventDefault()
-        navigate(NAV_TOP[idx].label === 'Calendar' ? '/earnings' : NAV_TOP[idx].to)
+        navigate(NAV_ITEMS[idx].to)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [navigate])
+
+  useEffect(() => {
+    if (!openDropdown) return
+    const handleClick = (event: MouseEvent) => {
+      if (navRef.current && !navRef.current.contains(event.target as Node)) {
+        setOpenDropdown(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [openDropdown])
+
+  useEffect(() => {
+    setOpenDropdown(null)
+    setMobileMenuOpen(false)
+    setMobileExpanded(null)
+  }, [location.pathname])
 
   return (
     <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
@@ -62,7 +118,24 @@ export default function App() {
             <BrandMark />
           </Link>
 
-          <ProTabs activePath={location.pathname} />
+          <div ref={navRef} className="relative justify-self-center">
+            <DesktopNav
+              items={NAV_ITEMS}
+              activeKey={activeItem.key}
+              openKey={openDropdown}
+              onOpenChange={setOpenDropdown}
+              onNavigate={navigate}
+            />
+            <MobileNav
+              items={NAV_ITEMS}
+              activeKey={activeItem.key}
+              isOpen={mobileMenuOpen}
+              expandedKey={mobileExpanded}
+              onToggleOpen={setMobileMenuOpen}
+              onExpandChange={setMobileExpanded}
+              onNavigate={navigate}
+            />
+          </div>
           <div aria-hidden />
         </div>
       </header>
@@ -84,52 +157,275 @@ export default function App() {
   )
 }
 
-type Rect = { left: number; top: number; width: number; height: number }
+type DesktopNavProps = {
+  items: NavItem[]
+  activeKey: NavKey
+  openKey: NavKey | null
+  onOpenChange: (key: NavKey | null) => void
+  onNavigate: (to: string) => void
+}
 
-function DropdownPortal({
-  anchorRect,
-  children,
-  onClose,
-}: {
-  anchorRect: Rect | null
-  children: React.ReactNode
-  onClose: () => void
-}) {
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      // close if click outside the panel
-      const el = document.getElementById('nav-portal-panel')
-      if (el && !el.contains(e.target as Node)) onClose()
-    }
-    function onEsc(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onEsc)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onEsc)
-    }
-  }, [onClose])
+function DesktopNav({ items, activeKey, openKey, onOpenChange, onNavigate }: DesktopNavProps) {
+  return (
+    <div className="relative hidden md:block" onMouseLeave={() => onOpenChange(null)}>
+      <nav className="relative flex items-center rounded-full border border-[var(--border)]/60 bg-white/70 px-2 py-1 shadow-[0_14px_36px_rgba(15,23,42,0.16)] backdrop-blur-md dark:bg-[var(--panel)]/80 dark:shadow-[0_14px_40px_rgba(8,12,35,0.55)]">
+        {items.map((item) => {
+          const selected = activeKey === item.key
+          const hasDropdown = !!item.dropdown?.length
+          const baseClasses = `relative flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors duration-200 focus:outline-none ${
+            selected ? 'text-slate-900 dark:text-white' : 'text-[var(--muted)] hover:text-[var(--text)]'
+          }`
 
-  if (!anchorRect) return null
+          const highlight = selected ? (
+            <motion.span
+              layoutId="nav-highlight"
+              className="pointer-events-none absolute inset-0 rounded-full"
+              style={{
+                background: 'linear-gradient(120deg, rgba(123,91,251,0.28), rgba(60,196,255,0.18))',
+                boxShadow: '0 12px 32px rgba(123,91,251,0.25)',
+                border: '1px solid rgba(255,255,255,0.35)',
+              }}
+              transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+            />
+          ) : null
 
-  const top = Math.round(anchorRect.top + anchorRect.height + 8) // 8px gap below trigger
-  const left = Math.round(anchorRect.left)
+          return (
+            <div key={item.key} className="relative px-1">
+              {hasDropdown ? (
+                <button
+                  type="button"
+                  className={baseClasses}
+                  onClick={() => onOpenChange(openKey === item.key ? null : item.key)}
+                  onMouseEnter={() => onOpenChange(item.key)}
+                  onFocus={() => onOpenChange(item.key)}
+                  aria-haspopup="menu"
+                  aria-expanded={openKey === item.key}
+                >
+                  {highlight}
+                  <span className="relative z-10 whitespace-nowrap">{item.label}</span>
+                  <span className="relative z-10 text-xs opacity-70">
+                    <ChevronDownIcon className={`h-3 w-3 transition-transform duration-200 ${openKey === item.key ? 'rotate-180' : ''}`} />
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={baseClasses}
+                  onClick={() => {
+                    onOpenChange(null)
+                    onNavigate(item.to)
+                  }}
+                >
+                  {highlight}
+                  <span className="relative z-10 whitespace-nowrap">{item.label}</span>
+                </button>
+              )}
 
-  return createPortal(
-    <div
-      id="nav-portal-panel"
-      className="fixed z-[200] w-56 rounded-xl border border-[var(--border)] shadow-2xl"
-      style={{
-        top,
-        left,
-        background: '#0A1630', // SOLID, OPAQUE (no transparency, no blur)
-      }}
-    >
-      {children}
-    </div>,
-    document.body
+              <AnimatePresence>
+                {hasDropdown && openKey === item.key && (
+                  <motion.div
+                    key={`${item.key}-dropdown`}
+                    initial={{ opacity: 0, y: -10, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                    transition={{ duration: 0.18, ease: 'easeOut' }}
+                    className="absolute left-1/2 top-[calc(100%+14px)] z-40 w-64 -translate-x-1/2 rounded-2xl border border-white/10 bg-[#070f2a] text-white shadow-[0_26px_70px_rgba(7,12,35,0.7)]"
+                    onMouseEnter={() => onOpenChange(item.key)}
+                  >
+                    <div className="flex flex-col gap-1 py-2">
+                      {item.dropdown!.map((sub) => {
+                        const disabled = sub.disabled || !sub.to
+                        return disabled ? (
+                          <div
+                            key={`${item.key}-${sub.label}`}
+                            className="mx-2 rounded-xl px-3 py-2 text-sm text-white/50 backdrop-blur-sm"
+                          >
+                            <div>{sub.label}</div>
+                            <div className="text-xs text-white/40">Coming soon</div>
+                          </div>
+                        ) : (
+                          <button
+                            key={`${item.key}-${sub.label}`}
+                            type="button"
+                            onClick={() => {
+                              onOpenChange(null)
+                              onNavigate(sub.to)
+                            }}
+                            className="mx-2 flex w-[calc(100%-1rem)] flex-col gap-1 rounded-xl px-3 py-2 text-left text-sm text-white transition hover:bg-white/10"
+                          >
+                            <span>{sub.label}</span>
+                            {sub.description && <span className="text-xs text-white/60">{sub.description}</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )
+        })}
+      </nav>
+    </div>
+  )
+}
+
+type MobileNavProps = {
+  items: NavItem[]
+  activeKey: NavKey
+  isOpen: boolean
+  expandedKey: NavKey | null
+  onToggleOpen: (open: boolean) => void
+  onExpandChange: (key: NavKey | null) => void
+  onNavigate: (to: string) => void
+}
+
+function MobileNav({ items, activeKey, isOpen, expandedKey, onToggleOpen, onExpandChange, onNavigate }: MobileNavProps) {
+  return (
+    <div className="md:hidden">
+      <button
+        type="button"
+        onClick={() => onToggleOpen(!isOpen)}
+        className="flex items-center gap-2 rounded-full border border-[var(--border)]/60 bg-white/80 px-4 py-2 text-sm font-semibold text-[var(--text)] shadow-[0_12px_26px_rgba(15,23,42,0.14)] backdrop-blur-md transition hover:-translate-y-[1px] hover:shadow-[0_16px_40px_rgba(15,23,42,0.18)] dark:bg-[var(--panel)]/80"
+      >
+        Menu
+        <MenuIcon open={isOpen} />
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -12, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.96 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="absolute left-1/2 z-[180] mt-3 w-[min(20rem,calc(100vw-2rem))] -translate-x-1/2 rounded-3xl border border-[var(--border)]/60 bg-[color:var(--bg)]/95 p-3 shadow-[0_28px_70px_rgba(15,23,42,0.28)] backdrop-blur-xl"
+          >
+            <div className="space-y-2">
+              {items.map((item) => {
+                const hasDropdown = !!item.dropdown?.length
+                const expanded = hasDropdown && ((expandedKey ?? activeKey) === item.key)
+                return (
+                  <div
+                    key={`mobile-${item.key}`}
+                    className="overflow-hidden rounded-2xl border border-[var(--border)]/40 bg-white/92 shadow-[0_18px_44px_rgba(15,23,42,0.12)] dark:bg-[var(--panel)]/80"
+                  >
+                    <div className="flex items-center justify-between">
+                      {hasDropdown ? (
+                        <button
+                          type="button"
+                          onClick={() => onExpandChange(expanded ? null : item.key)}
+                          className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-semibold text-[var(--text)]"
+                        >
+                          <span>{item.label}</span>
+                          <ChevronDownIcon className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onToggleOpen(false)
+                            onNavigate(item.to)
+                          }}
+                          className="w-full px-4 py-3 text-left text-sm font-semibold text-[var(--text)]"
+                        >
+                          {item.label}
+                        </button>
+                      )}
+                    </div>
+
+                    {hasDropdown && (
+                      <AnimatePresence initial={false}>
+                        {expanded && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2, ease: 'easeOut' }}
+                            className="space-y-1 border-t border-[var(--border)]/40 bg-black/5 px-3 py-2 dark:bg-white/5"
+                          >
+                            {item.dropdown!.map((sub) => {
+                              const disabled = sub.disabled || !sub.to
+                              return disabled ? (
+                                <div
+                                  key={`mobile-${item.key}-${sub.label}`}
+                                  className="rounded-xl px-3 py-2 text-sm text-[var(--muted)] opacity-60"
+                                >
+                                  {sub.label} <span className="text-xs uppercase tracking-[0.2em]">Soon</span>
+                                </div>
+                              ) : (
+                                <button
+                                  key={`mobile-${item.key}-${sub.label}`}
+                                  type="button"
+                                  onClick={() => {
+                                    onToggleOpen(false)
+                                    onNavigate(sub.to)
+                                  }}
+                                  className="w-full rounded-xl px-3 py-2 text-left text-sm text-[var(--text)] transition hover:bg-white/60 dark:hover:bg-white/10"
+                                >
+                                  {sub.label}
+                                </button>
+                              )
+                            })}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M5 7l5 5 5-5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function MenuIcon({ open }: { open: boolean }) {
+  const common: React.CSSProperties = {
+    position: 'absolute',
+    left: 0,
+    width: '100%',
+    height: '2px',
+    borderRadius: '999px',
+    background: 'currentColor',
+    transition: 'transform 0.2s ease, opacity 0.2s ease, top 0.2s ease',
+  }
+
+  return (
+    <span className="relative block h-[18px] w-[22px]">
+      <span
+        style={{
+          ...common,
+          top: open ? '50%' : '0%',
+          transform: open ? 'translateY(-50%) rotate(45deg)' : 'translateY(0) rotate(0deg)',
+        }}
+      />
+      <span
+        style={{
+          ...common,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          opacity: open ? 0 : 1,
+        }}
+      />
+      <span
+        style={{
+          ...common,
+          top: open ? '50%' : 'calc(100% - 2px)',
+          transform: open ? 'translateY(-50%) rotate(-45deg)' : 'translateY(0) rotate(0deg)',
+        }}
+      />
+    </span>
   )
 }
 
@@ -204,145 +500,6 @@ function FooterGlyphRow() {
         </span>
       ))}
     </div>
-  )
-}
-
-function ProTabs({ activePath }: { activePath: string }) {
-  const [open, setOpen] = React.useState<string | null>(null)
-  const [anchorRect, setAnchorRect] = React.useState<Rect | null>(null)
-  const containerRef = React.useRef<HTMLDivElement>(null)
-  const triggerRefs = React.useRef<Record<string, HTMLButtonElement | null>>({})
-
-  useEffect(() => {
-    function onResize() {
-      if (open && triggerRefs.current[open]) {
-        const r = triggerRefs.current[open]!.getBoundingClientRect()
-        setAnchorRect({ left: r.left, top: r.top, width: r.width, height: r.height })
-      }
-    }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [open])
-
-  const idx = Math.max(
-    0,
-    NAV_TOP.findIndex(
-      n => n.to === activePath || (n.label === 'Calendar' && activePath.startsWith('/earnings'))
-    )
-  )
-
-  return (
-    <nav role="tablist" aria-label="Primary" className="relative flex items-center justify-self-center" ref={containerRef}>
-      <div className="relative flex rounded-2xl border border-[var(--border)] px-2 py-1 bg-[color:var(--bg)]/60">
-        {NAV_TOP.map((item, i) => {
-          const selected = i === idx
-          const submenu = NAV_DROPDOWNS[item.label as keyof typeof NAV_DROPDOWNS]
-
-          if (!submenu) {
-            return (
-              <Link
-                key={item.to}
-                to={item.to}
-                role="tab"
-                aria-selected={selected}
-                className={`
-                  relative rounded-xl px-3 md:px-4 py-2 text-[15px] font-semibold
-                  ${selected ? 'text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}
-                  transition-transform hover:-translate-y-[1px] focus:outline-none
-                `}
-              >
-                {selected && (
-                  <motion.span
-                    layoutId="pro-underline"
-                    className="absolute left-2 right-2 -bottom-[6px] h-[3px] rounded-full"
-                    style={{
-                      background: 'linear-gradient(90deg, var(--brand2), var(--brand1))',
-                      boxShadow: '0 0 16px rgba(123,91,251,0.35)',
-                    }}
-                  />
-                )}
-                {item.label}
-              </Link>
-            )
-          }
-
-          return (
-            <div key={item.label} className="relative">
-              <button
-                type="button"
-                ref={(el) => (triggerRefs.current[item.label] = el)}
-                onClick={() => {
-                  if (open === item.label) {
-                    setOpen(null)
-                    setAnchorRect(null)
-                  } else {
-                    const r = triggerRefs.current[item.label]!.getBoundingClientRect()
-                    setAnchorRect({ left: r.left, top: r.top, width: r.width, height: r.height })
-                    setOpen(item.label)
-                  }
-                }}
-                onMouseEnter={() => {
-                  const r = triggerRefs.current[item.label]?.getBoundingClientRect()
-                  if (r) setAnchorRect({ left: r.left, top: r.top, width: r.width, height: r.height })
-                  setOpen(item.label)
-                }}
-                className={`
-                  relative rounded-xl px-3 md:px-4 py-2 text-[15px] font-semibold
-                  ${selected ? 'text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text)]'}
-                  transition-transform hover:-translate-y-[1px] focus:outline-none
-                `}
-                aria-haspopup="menu"
-                aria-expanded={open === item.label}
-              >
-                {selected && (
-                  <motion.span
-                    layoutId="pro-underline"
-                    className="absolute left-2 right-2 -bottom-[6px] h-[3px] rounded-full"
-                    style={{
-                      background: 'linear-gradient(90deg, var(--brand2), var(--brand1))',
-                      boxShadow: '0 0 16px rgba(123,91,251,0.35)',
-                    }}
-                  />
-                )}
-                {item.label}
-                <span className="ml-1 inline-block">
-                  <svg width="14" height="14" viewBox="0 0 24 24">
-                    <path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="2" />
-                  </svg>
-                </span>
-              </button>
-
-              {/* Render dropdown OUTSIDE the blurred header */}
-              {open === item.label && (
-                <DropdownPortal anchorRect={anchorRect} onClose={() => { setOpen(null); setAnchorRect(null) }}>
-                  <div className="p-2">
-                    {NAV_DROPDOWNS[item.label].map((sub) =>
-                      sub.disabled ? (
-                        <span
-                          key={sub.label}
-                          className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm text-[var(--muted)] opacity-70 select-none cursor-not-allowed"
-                        >
-                          {sub.label} <span className="text-xs">(soon)</span>
-                        </span>
-                      ) : (
-                        <Link
-                          key={sub.label}
-                          to={sub.href!}
-                          className="block rounded-lg px-3 py-2 text-sm hover:bg-white/10"
-                          onClick={() => { setOpen(null); setAnchorRect(null) }}
-                        >
-                          {sub.label}
-                        </Link>
-                      )
-                    )}
-                  </div>
-                </DropdownPortal>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </nav>
   )
 }
 
