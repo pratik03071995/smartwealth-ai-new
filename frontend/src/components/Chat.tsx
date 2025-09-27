@@ -627,7 +627,7 @@ export default function Chat() {
         <div className="sticky top-0 z-20 bg-[var(--panel)]/92 px-4 pt-2 backdrop-blur">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-2 rounded-full border border-black/15 bg-gradient-to-r from-[#2C3444] via-[#323A4B] to-[#3A4253] px-3 py-1 text-[11px] font-medium text-white shadow-[0_12px_28px_rgba(22,28,42,0.2)]">
+              <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-gradient-to-r from-[#3B4252] via-[#444B5A] to-[#4C5363] px-3 py-1 text-[11px] font-medium text-white shadow-[0_10px_24px_rgba(24,30,44,0.16)]">
                 SmartWealth Assistant
               </span>
             </div>
