@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import FloatingChat from './components/FloatingChat'
 
 function useThemeBoot() {
   const getInitial = () => {
@@ -73,6 +74,7 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const activeItem = useMemo(() => NAV_ITEMS.find((item) => item.match(location.pathname)) ?? NAV_ITEMS[0], [location.pathname])
+  const showFloatingChat = location.pathname !== '/'
   const [openDropdown, setOpenDropdown] = React.useState<NavKey | null>(null)
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false)
   const [mobileExpanded, setMobileExpanded] = React.useState<NavKey | null>(null)
@@ -143,6 +145,8 @@ export default function App() {
       <main className="mx-auto max-w-6xl px-6 py-10 md:py-12">
         <Outlet />
       </main>
+
+      {showFloatingChat ? <FloatingChat /> : null}
 
       <footer className="border-t border-[var(--border)] bg-gradient-to-b from-transparent to-[color:var(--bg)]">
         <div className="mx-auto max-w-6xl px-6 py-8 grid gap-6 md:grid-cols-3">

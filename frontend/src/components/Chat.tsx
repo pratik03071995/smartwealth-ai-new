@@ -1,6 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import axios from 'axios'
-import { apiBase } from '../services/api'
 import { motion } from 'framer-motion'
 import {
   ResponsiveContainer,
@@ -15,7 +13,20 @@ import {
   Scatter,
 } from 'recharts'
 
-const API_BASE = apiBase
+import {
+  AssistantMsg,
+  Msg,
+  TablePayload,
+  TableColumn,
+  ChartPayload,
+  ChartFormat,
+  HealthSnapshot,
+  HealthCheckEntry,
+  SystemStatus,
+  useChatSession,
+  isAssistant,
+  submitFeedbackAPI,
+} from './chat/ChatSessionProvider'
 
 const compactCurrency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -64,49 +75,6 @@ const METRIC_LABELS: Record<string, string> = {
   relationship_strength: 'Relationship Strength',
   est_contract_value_usd_m: 'Contract Value (USDm)',
 }
-
-type TableColumn = { key: string; label: string }
-type TablePayload = { columns: TableColumn[]; rows: Record<string, unknown>[] }
-type ChartDatum = { label: string; value: number; key?: string }
-type ChartFormat = 'currency' | 'number' | 'percent'
-type ScatterDatum = { label: string; x: number; y: number; size?: number }
-
-type ChartPayload =
-  | { type: 'bar'; title: string; metric?: string; format?: ChartFormat; data: ChartDatum[] }
-  | {
-      type: 'scatter'
-      title: string
-      xKey: string
-      yKey: string
-      format?: { x?: ChartFormat; y?: ChartFormat; size?: ChartFormat }
-      data: ScatterDatum[]
-      sizeKey?: string
-    }
-
-type AssistantMsg = {
-  role: 'assistant'
-  id?: string
-  text: string
-  table?: TablePayload
-  chart?: ChartPayload | null
-  sql?: string | null
-  latencyMs?: number
-  prompt?: string
-  feedback?: 'up' | 'down' | null
-  plan?: Record<string, unknown> | null
-  followups?: string[] | null
-  tablePreview?: Record<string, unknown>[] | null
-  sourceLabel?: string | null
-  dataSource?: string | null
-  llmSource?: string | null
-  llmSourceRaw?: string | null
-  searchProvider?: string | null
-}
-
-type UserMsg = { role: 'user'; text: string }
-type Msg = AssistantMsg | UserMsg
-
-const isAssistant = (msg: Msg): msg is AssistantMsg => msg.role === 'assistant'
 
 function formatCell(value: unknown, key: string): React.ReactNode {
   if (value === null || value === undefined || value === '') return '—'
@@ -157,25 +125,6 @@ const BRAND_COLORS = {
   accent: '#EC4899',
 }
 
-type SystemStatus = 'checking' | 'ready' | 'degraded' | 'unavailable'
-
-type HealthCheckEntry = {
-  status?: string
-  summary?: string
-  detail?: string
-  checkedAt?: string
-  latencyMs?: number
-}
-
-type HealthSnapshot = {
-  status?: string
-  updatedAt?: string
-  expiresAt?: string
-  cacheTtlSeconds?: number
-  suggestedRefreshSeconds?: number
-  checks?: Record<string, HealthCheckEntry>
-}
-
 const STATUS_CONFIG: Record<SystemStatus, { label: string; container: string; dot: string; textClass: string }> = {
   checking: {
     label: 'Setting up…',
@@ -219,92 +168,51 @@ function formatLatency(raw: number | undefined) {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`
 }
 
-function createMessageId() {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    try {
-      return crypto.randomUUID()
-    } catch (_) {
-      // fall through to fallback id
-    }
-  }
-  return `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`
+type ChatProps = {
+  variant?: 'full' | 'embedded'
+  className?: string
 }
 
-const INITIAL_ASSISTANT: AssistantMsg = {
-  role: 'assistant',
-  text: 'Hi! Ask me about company fundamentals, earnings, scores, or vendor relationships. Try “Where is Meta headquartered?” or “Who are Nvidia’s customers?”.',
-  id: 'welcome',
-  feedback: null,
-  plan: null,
-  followups: null,
-}
-
-export default function Chat() {
-  const [messages, setMessages] = useState<Msg[]>([INITIAL_ASSISTANT])
+export default function Chat({ variant = 'full', className }: ChatProps) {
+  const {
+    messages,
+    isLoading,
+    pendingLatencyMs,
+    systemStatus,
+    healthSnapshot,
+    isHealthRefreshing,
+    refreshHealth,
+    sendMessage,
+    clearConversation,
+    updateMessages,
+  } = useChatSession()
   const [input, setInput] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
   const [chartSpec, setChartSpec] = useState<ChartPayload | null>(null)
   const [graphOpen, setGraphOpen] = useState(false)
   const [graphReady, setGraphReady] = useState(false)
-  const [pendingLatencyMs, setPendingLatencyMs] = useState(0)
   const [feedbackLoading, setFeedbackLoading] = useState<Record<string, boolean>>({})
-  const [systemStatus, setSystemStatus] = useState<SystemStatus>('checking')
-  const [healthSnapshot, setHealthSnapshot] = useState<HealthSnapshot | null>(null)
-  const [isHealthRefreshing, setIsHealthRefreshing] = useState(false)
   const endRef = useRef<HTMLDivElement | null>(null)
-  const pendingTimerRef = useRef<number | null>(null)
-  const pendingStartRef = useRef<number | null>(null)
-  const lastPromptRef = useRef('')
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const sendGuardRef = useRef(false)
 
-  const refreshHealth = useCallback(
-    async (options: { force?: boolean; silent?: boolean } = {}): Promise<SystemStatus> => {
-      const { force = false, silent = false } = options
-      if (!silent) {
-        setIsHealthRefreshing(true)
-        setSystemStatus('checking')
-      }
+  const outerClasses = useMemo(
+    () =>
+      [
+        'relative z-10',
+        variant === 'embedded' ? 'w-full' : 'mx-auto max-w-xl',
+        className ?? '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    [variant, className],
+  )
 
-      try {
-        const query = force ? '?refresh=1' : ''
-        const response = await fetch(`${API_BASE}/health${query}`, {
-          headers: { Accept: 'application/json' },
-        })
-        if (!response.ok) {
-          throw new Error(`Health check failed (${response.status})`)
-        }
-
-        const data: HealthSnapshot = await response.json()
-        setHealthSnapshot(data)
-
-        const normalized = String(data.status || '').toLowerCase()
-        const nextStatus: SystemStatus =
-          normalized === 'ready' || normalized === 'ok'
-            ? 'ready'
-            : normalized === 'degraded'
-              ? 'degraded'
-              : 'unavailable'
-
-        setSystemStatus(nextStatus)
-        if (nextStatus === 'ready') {
-          setMessages((prev) =>
-            prev.filter((entry) => !(isAssistant(entry) && entry.id === 'setup_pending')),
-          )
-        }
-        return nextStatus
-      } catch (err) {
-        console.error('Health check failed', err)
-        setHealthSnapshot(null)
-        setSystemStatus('unavailable')
-        return 'unavailable'
-      } finally {
-        if (!silent) {
-          setIsHealthRefreshing(false)
-        }
-      }
-    },
-    [setMessages],
+  const scrollAreaMaxHeight = variant === 'embedded' ? 'max-h-[60vh]' : 'max-h-[28rem]'
+  const cardClasses = useMemo(
+    () =>
+      variant === 'embedded'
+        ? 'rounded-[20px] border border-[var(--border)] bg-[var(--panel)]/96 p-3 shadow-[0_30px_60px_rgba(17,21,41,0.24)] backdrop-blur'
+        : 'rounded-[22px] border border-[var(--border)] bg-[var(--panel)]/95 p-4 shadow-[0_24px_60px_rgba(19,24,52,0.16)] backdrop-blur',
+    [variant],
   )
 
   const statusHint = useMemo(() => {
@@ -387,64 +295,8 @@ export default function Chat() {
   }, [chartSpec])
 
   useEffect(() => {
-    refreshHealth({ force: true })
-  }, [refreshHealth])
-
-  useEffect(() => {
-    const handleFocus = () => refreshHealth({ force: true, silent: true })
-    const handleVisibility = () => {
-      if (!document.hidden) {
-        refreshHealth({ force: true, silent: true })
-      }
-    }
-    window.addEventListener('focus', handleFocus)
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => {
-      window.removeEventListener('focus', handleFocus)
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
-  }, [refreshHealth])
-
-  useEffect(() => {
-    const seconds = healthSnapshot?.suggestedRefreshSeconds
-    if (!seconds) return
-    const interval = window.setInterval(() => {
-      if (!isHealthRefreshing) {
-        refreshHealth({ force: true, silent: true })
-      }
-    }, Math.max(seconds, 15) * 1000)
-    return () => window.clearInterval(interval)
-  }, [healthSnapshot?.suggestedRefreshSeconds, isHealthRefreshing, refreshHealth])
-
-  useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
-
-  useEffect(() => {
-    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
-    if (isLoading) {
-      pendingStartRef.current = now()
-      if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
-      pendingTimerRef.current = window.setInterval(() => {
-        if (pendingStartRef.current) {
-          setPendingLatencyMs(now() - pendingStartRef.current)
-        }
-      }, 120)
-      return () => {
-        if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
-      }
-    }
-
-    if (pendingTimerRef.current) {
-      window.clearInterval(pendingTimerRef.current)
-      pendingTimerRef.current = null
-    }
-    pendingStartRef.current = null
-    setPendingLatencyMs(0)
-    return () => {
-      if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
-    }
-  }, [isLoading])
 
   const renderTable = (table: TablePayload | undefined) => {
     if (!table || !table.rows?.length) return null
@@ -539,8 +391,8 @@ export default function Chat() {
     }
 
     try {
-      await axios.post(`${API_BASE}/chat/feedback`, payload)
-      setMessages((prev) =>
+      await submitFeedbackAPI(payload)
+      updateMessages((prev) =>
         prev.map((entry) =>
           isAssistant(entry) && entry.id === msg.id
             ? { ...entry, feedback: rating }
@@ -634,210 +486,24 @@ export default function Chat() {
     setTimeout(() => setGraphReady(true), 40)
   }
 
-  function clearConversation() {
-    setMessages([INITIAL_ASSISTANT])
+  const handleClearConversation = useCallback(() => {
+    clearConversation()
     setChartSpec(null)
     setGraphOpen(false)
     setFeedbackLoading({})
-  }
+  }, [clearConversation])
 
   async function send(messageOverride?: string) {
     const text = (messageOverride ?? input).trim()
-    if (!text || sendDisabled || sendGuardRef.current) {
-      return
-    }
-
-    sendGuardRef.current = true
-    try {
-      const statusAfterCheck = await refreshHealth({ force: true })
-      if (statusAfterCheck === 'unavailable') {
-        setMessages((prev) => {
-          const hasNotice = prev.some((entry) => isAssistant(entry) && entry.id === 'setup_pending')
-          if (hasNotice) return prev
-          const notice: AssistantMsg = {
-            role: 'assistant',
-            id: 'setup_pending',
-            text: 'System setup is still running. Please try again once the status badge shows Ready.',
-            feedback: null,
-            plan: null,
-            followups: null,
-            chart: null,
-            tablePreview: null,
-            sql: null,
-            latencyMs: undefined,
-            sourceLabel: null,
-            dataSource: null,
-            llmSource: null,
-            llmSourceRaw: null,
-            searchProvider: null,
-          }
-          return [...prev, notice]
-        })
-        return
-      }
-
-      setInput('')
-      setIsLoading(true)
-
-      const assistantId = createMessageId()
-      lastPromptRef.current = text
-      const placeholder: AssistantMsg = {
-        role: 'assistant',
-        text: '',
-        id: assistantId,
-        feedback: null,
-        plan: null,
-        followups: null,
-        table: undefined,
-        chart: null,
-        tablePreview: null,
-        sql: null,
-        latencyMs: undefined,
-        prompt: lastPromptRef.current,
-        sourceLabel: null,
-        dataSource: null,
-        llmSource: null,
-        llmSourceRaw: null,
-        searchProvider: null,
-      }
-
-      setMessages((m) => [...m, { role: 'user', text }, placeholder])
-
-      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
-
-      try {
-        const response = await fetch(`${API_BASE}/chat/stream`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'text/event-stream',
-          },
-          body: JSON.stringify({ message: text }),
-        })
-
-        if (!response.ok || !response.body) {
-          throw new Error(`Streaming request failed (${response.status})`)
-        }
-
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-        let streamingText = ''
-        let finished = false
-        let currentAssistantId = assistantId
-        const appendDelta = (delta: string) => {
-          streamingText += delta
-          setMessages((prev) =>
-            prev.map((entry) =>
-              isAssistant(entry) && entry.id === currentAssistantId
-                ? { ...entry, text: streamingText }
-                : entry,
-            ),
-          )
-        }
-
-        while (!finished) {
-          const { value, done } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-
-          let boundary = buffer.indexOf('\n\n')
-          while (boundary !== -1) {
-            const rawEvent = buffer.slice(0, boundary)
-            buffer = buffer.slice(boundary + 2)
-            boundary = buffer.indexOf('\n\n')
-
-            const lines = rawEvent.split('\n')
-            const dataLine = lines.find((line) => line.startsWith('data:'))
-            if (!dataLine) continue
-            const jsonPayload = dataLine.slice(5).trim()
-            if (!jsonPayload) continue
-
-            let payload: any
-            try {
-              payload = JSON.parse(jsonPayload)
-            } catch (parseErr) {
-              console.warn('Failed to parse SSE payload', parseErr)
-              continue
-            }
-
-            if (payload.type === 'delta' && typeof payload.delta === 'string') {
-              appendDelta(payload.delta)
-            } else if (payload.type === 'result') {
-              const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
-              const latencyMs = Math.max(0, endedAt - startedAt)
-              const data = payload.data ?? {}
-              currentAssistantId = (data.messageId as string) || currentAssistantId
-              const sourceLabel = (data.sourceLabel as string | undefined) ?? null
-              const dataSource = (data.data_source as string | undefined) ?? null
-              const llmSource = (data.llmSource as string | undefined) ?? null
-              const llmSourceRaw = (data.llmSourceRaw as string | undefined) ?? null
-              const searchProvider = (data.search_provider as string | undefined) ?? null
-              const finalText =
-                typeof data.reply === 'string' && data.reply.length
-                  ? data.reply
-                  : streamingText || 'I could not craft a response for that.'
-
-              setMessages((prev) =>
-                prev.map((entry) =>
-                  isAssistant(entry) && entry.id === assistantId
-                    ? {
-                        ...entry,
-                        id: currentAssistantId,
-                        text: finalText,
-                        table: data.table,
-                        chart: data.chart,
-                        sql: data.sql,
-                        latencyMs,
-                        plan: data.plan ?? null,
-                        followups: (data.followups as string[] | undefined) ?? null,
-                        tablePreview: (data.tablePreview as Record<string, unknown>[] | undefined) ?? null,
-                        sourceLabel,
-                        dataSource,
-                        llmSource,
-                        llmSourceRaw,
-                        searchProvider,
-                      }
-                    : entry,
-                ),
-              )
-            } else if (payload.type === 'error') {
-              setMessages((prev) =>
-                prev.map((entry) =>
-                  isAssistant(entry) && entry.id === assistantId
-                    ? {
-                        ...entry,
-                        text: payload.error || 'Error reaching API.',
-                      }
-                    : entry,
-                ),
-              )
-            } else if (payload.type === 'end') {
-              finished = true
-              break
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Streaming chat failed', err)
-        setMessages((prev) =>
-          prev.map((entry) =>
-            isAssistant(entry) && entry.id === assistantId
-              ? { ...entry, text: 'Error reaching API.' }
-              : entry,
-          ),
-        )
-      } finally {
-        setIsLoading(false)
-      }
-    } finally {
-      sendGuardRef.current = false
-    }
+    if (!text || sendDisabled) return
+    setInput('')
+    await sendMessage(text)
+    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   return (
-    <div className="relative z-10 mx-auto max-w-xl">
-      <div className="rounded-[22px] border border-[var(--border)] bg-[var(--panel)]/95 p-4 shadow-[0_24px_60px_rgba(19,24,52,0.16)] backdrop-blur">
+    <div className={outerClasses}>
+      <div className={cardClasses}>
         <div className="sticky top-0 z-20 bg-[var(--panel)]/92 px-4 pt-2 backdrop-blur">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -870,7 +536,7 @@ export default function Chat() {
               ) : null}
               {messages.length > 1 ? (
                 <button
-                  onClick={clearConversation}
+                  onClick={handleClearConversation}
                   className="inline-flex items-center gap-1 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/70 px-3 py-[6px] text-[10px] font-semibold text-[var(--brand2)] transition hover:border-[var(--brand2)]/60 hover:text-[var(--text)]"
                 >
                   Clear
@@ -881,7 +547,7 @@ export default function Chat() {
           <div className="mt-3 h-px w-full bg-gradient-to-r from-transparent via-[var(--brand2)]/35 to-transparent" />
         </div>
         {/* SCROLLABLE feed */}
-        <div className="flex max-h-[28rem] flex-col gap-3 overflow-y-auto px-4 pb-4 pt-3 pr-4 scroll-slim">
+        <div className={`flex ${scrollAreaMaxHeight} flex-col gap-3 overflow-y-auto px-4 pb-4 pt-3 pr-4 scroll-slim`}>
           {messages.map((m, i) => (
             <motion.div
               key={i}

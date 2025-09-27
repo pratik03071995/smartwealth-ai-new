@@ -9,6 +9,7 @@ import Score from './pages/Score'
 import Vendors from './pages/Vendors'
 import Sectors from './pages/Sectors'
 import CompanyInfo from './pages/CompanyInfo'
+import { ChatSessionProvider } from './components/chat/ChatSessionProvider'
 
 const router = createBrowserRouter([
   { path: '/', element: <App />, children: [
@@ -23,6 +24,8 @@ const router = createBrowserRouter([
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <ChatSessionProvider>
+      <RouterProvider router={router} />
+    </ChatSessionProvider>
   </React.StrictMode>
 )
