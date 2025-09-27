@@ -13,10 +13,14 @@ from decimal import Decimal
 from difflib import SequenceMatcher
 from typing import Any, Dict, List, Literal, Optional, Tuple, Callable
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
+
 import requests
 from dateutil import parser as dateparser
 from flask import jsonify, request
-from contextvars import ContextVar
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 try:
     from openai import APIError as OpenAIError, AzureOpenAI, OpenAI
@@ -55,6 +59,7 @@ from .feedback import (
     record_feedback,
 )
 from .utils import first_key, json_default, to_iso, to_native
+from . import web_search as web_search_module
 from .web_search import (
     detect_search_intent,
     search_web,
@@ -127,6 +132,12 @@ OLLAMA_MODEL = settings.OLLAMA_MODEL
 OLLAMA_TIMEOUT = settings.OLLAMA_TIMEOUT
 OLLAMA_FALLBACK_BASE_URL = settings.OLLAMA_FALLBACK_BASE_URL
 LLM_MODE = settings.LLM_MODE
+
+HEALTH_CACHE_TTL_SECONDS = 60
+HEALTH_PROBE_TIMEOUT_SECONDS = 6
+_HEALTH_CACHE_LOCK = Lock()
+_HEALTH_CACHE: Optional[dict[str, Any]] = None
+_HEALTH_CACHE_EXPIRES_AT = 0.0
 
 DATE_CANDIDATES = settings.DATE_CANDIDATES
 TIME_CANDIDATES = settings.TIME_CANDIDATES
@@ -977,6 +988,40 @@ class LLMConfigurationError(RuntimeError):
 
 _LLM_CLIENT_CACHE: Optional[tuple[str, Any, Any]] = None
 
+
+def _create_retrying_session() -> requests.Session:
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=0.4,
+        status_forcelist=(408, 409, 425, 429, 500, 502, 503, 504),
+        allowed_methods=False,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers["Connection"] = "close"
+    return session
+
+
+def _reset_llm_session(expected_mode: str) -> Optional[requests.Session]:
+    global _LLM_CLIENT_CACHE
+    cache = _LLM_CLIENT_CACHE
+    if not cache or cache[0] != expected_mode:
+        return None
+    _, cached_session, config = cache
+    if isinstance(cached_session, requests.Session):
+        try:
+            cached_session.close()
+        except Exception:  # pragma: no cover - best effort cleanup
+            pass
+    new_session = _create_retrying_session()
+    _LLM_CLIENT_CACHE = (expected_mode, new_session, config)
+    return new_session
+
 _LLM_PROVIDER_TOKEN: ContextVar[str] = ContextVar("llm_provider", default="none")
 
 
@@ -1055,7 +1100,7 @@ def _ensure_llm_client() -> tuple[str, Any, Any]:
 
     allow_deepseek = mode_pref in {"", "deepseek"}
     if DEEPSEEK_API_KEY and allow_deepseek:
-        session = requests.Session()
+        session = _create_retrying_session()
         fallback_config: Optional[dict[str, Any]] = None
         if OLLAMA_BASE_URL:
             base = OLLAMA_BASE_URL.rstrip("/")
@@ -1097,7 +1142,7 @@ def _ensure_llm_client() -> tuple[str, Any, Any]:
             fallbacks = [OLLAMA_FALLBACK_BASE_URL.rstrip("/")]
         elif "host.docker.internal" in base:
             fallbacks.append("http://172.17.0.1:11434")
-        session = requests.Session()
+        session = _create_retrying_session()
         config = {
             "base_urls": [base] + fallbacks,
             "model": OLLAMA_MODEL,
@@ -1798,22 +1843,59 @@ def _deepseek_chat_request(
         timeout,
         _summarize_messages(messages, per_message_limit=80),
     )
-    try:
-        resp = session.post(
-            endpoint,
-            headers=headers,
-            json=payload,
-            timeout=timeout,
-            stream=bool(stream_handler),
-        )
-    except Exception as exc:
+
+    resp = None
+    last_exc: Optional[Exception] = None
+    for attempt in range(2):
+        attempt_start = time.perf_counter()
+        try:
+            resp = session.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+                stream=bool(stream_handler),
+            )
+            break
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            latency_ms = (time.perf_counter() - attempt_start) * 1000
+            logger.warning(
+                "deepseek.request.transport_retry model=%s attempt=%s latency_ms=%.0f error=%s",
+                model_name,
+                attempt + 1,
+                latency_ms,
+                exc,
+            )
+            if attempt == 0:
+                replacement = _reset_llm_session("deepseek")
+                if replacement is not None:
+                    session = replacement
+                continue
+            logger.exception(
+                "deepseek.request.transport_failed model=%s latency_ms=%.0f error=%s",
+                model_name,
+                (time.perf_counter() - start_time) * 1000,
+                exc,
+            )
+            raise
+        except Exception as exc:
+            last_exc = exc
+            logger.exception(
+                "deepseek.request.transport_failed model=%s latency_ms=%.0f error=%s",
+                model_name,
+                (time.perf_counter() - start_time) * 1000,
+                exc,
+            )
+            raise
+    else:
         logger.exception(
             "deepseek.request.transport_failed model=%s latency_ms=%.0f error=%s",
             model_name,
             (time.perf_counter() - start_time) * 1000,
-            exc,
+            last_exc,
         )
-        raise
+        raise last_exc if last_exc else RuntimeError("DeepSeek transport failed")
 
     elapsed_ms = (time.perf_counter() - start_time) * 1000
     logger.info(
@@ -1976,7 +2058,7 @@ def _llm_chat(
             fallback_config = model_info.get("fallback") if isinstance(model_info, dict) else None
             if fallback_config:
                 try:
-                    fallback_session = requests.Session()
+                    fallback_session = _create_retrying_session()
                     logger.info("llm.chat.fallback_to_ollama")
                     result = _ollama_chat_request(
                         fallback_session,
@@ -3095,8 +3177,261 @@ def demo_score(symbol: str) -> Dict[str, Any]:
     verdict = "Buy" if overall >= 75 else ("Watch" if overall >= 60 else "Avoid")
     return {"symbol": symbol.upper(), "factors": factors, "overall": overall, "verdict": verdict}
 
+def _probe_primary_llm(timeout: int = HEALTH_PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
+    checked_at = datetime.utcnow()
+    if not DEEPSEEK_API_KEY:
+        return {
+            "status": "skipped",
+            "summary": "Not configured",
+            "checkedAt": to_iso(checked_at),
+        }
+
+    url = f"{DEEPSEEK_API_BASE}/models"
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+    start = time.perf_counter()
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        latency_ms = (time.perf_counter() - start) * 1000
+        if resp.ok:
+            return {
+                "status": "ready",
+                "summary": "Available",
+                "checkedAt": to_iso(checked_at),
+                "latencyMs": round(latency_ms, 1),
+            }
+        summary = "Responding with errors"
+        if resp.status_code >= 500:
+            summary = "Temporarily unavailable"
+        elif resp.status_code in {401, 403}:
+            summary = "Authentication issue"
+        return {
+            "status": "degraded",
+            "summary": summary,
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": f"status={resp.status_code}",
+        }
+    except requests.exceptions.Timeout as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.warning("health.probe.timeout service=primary_llm error=%s", exc)
+        return {
+            "status": "unavailable",
+            "summary": "No response",
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": _truncate(str(exc), 140),
+        }
+    except requests.exceptions.RequestException as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.warning("health.probe.failed service=primary_llm error=%s", exc)
+        return {
+            "status": "unavailable",
+            "summary": "No response",
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": _truncate(str(exc), 140),
+        }
+
+
+def _probe_fallback_llm(timeout: int = HEALTH_PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
+    checked_at = datetime.utcnow()
+    base_url = (OLLAMA_BASE_URL or "").strip()
+    if not base_url:
+        return {
+            "status": "skipped",
+            "summary": "Not configured",
+            "checkedAt": to_iso(checked_at),
+        }
+
+    url = f"{base_url.rstrip('/')}/api/tags"
+    start = time.perf_counter()
+    try:
+        resp = requests.get(url, timeout=timeout)
+        latency_ms = (time.perf_counter() - start) * 1000
+        if resp.ok:
+            return {
+                "status": "ready",
+                "summary": "Available",
+                "checkedAt": to_iso(checked_at),
+                "latencyMs": round(latency_ms, 1),
+            }
+        return {
+            "status": "degraded",
+            "summary": "Responding with errors",
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": f"status={resp.status_code}",
+        }
+    except requests.exceptions.Timeout as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.warning("health.probe.timeout service=fallback_llm error=%s", exc)
+        return {
+            "status": "degraded",
+            "summary": "Slow response",
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": _truncate(str(exc), 140),
+        }
+    except requests.exceptions.RequestException as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.warning("health.probe.failed service=fallback_llm error=%s", exc)
+        return {
+            "status": "unavailable",
+            "summary": "No response",
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": _truncate(str(exc), 140),
+        }
+
+
+def _probe_search_backend(timeout: int = HEALTH_PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
+    checked_at = datetime.utcnow()
+    provider = (web_search_module.SEARCH_PROVIDER or "").strip().lower()
+    start = time.perf_counter()
+
+    if provider == "google":
+        if not web_search_module.SEARCH_API_KEY or not web_search_module.SEARCH_ENGINE_ID:
+            return {
+                "status": "skipped",
+                "summary": "Not configured",
+                "checkedAt": to_iso(checked_at),
+            }
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "key": web_search_module.SEARCH_API_KEY,
+            "cx": web_search_module.SEARCH_ENGINE_ID,
+            "q": "system+status",
+            "num": 1,
+        }
+        headers = None
+    elif provider == "bing":
+        if not web_search_module.BING_SEARCH_KEY:
+            return {
+                "status": "skipped",
+                "summary": "Not configured",
+                "checkedAt": to_iso(checked_at),
+            }
+        url = "https://api.bing.microsoft.com/v7.0/search"
+        headers = {"Ocp-Apim-Subscription-Key": web_search_module.BING_SEARCH_KEY}
+        params = {"q": "system status", "count": 1}
+    elif provider == "serpapi":
+        if not web_search_module.SERPAPI_KEY:
+            return {
+                "status": "skipped",
+                "summary": "Not configured",
+                "checkedAt": to_iso(checked_at),
+            }
+        url = "https://serpapi.com/search"
+        params = {"api_key": web_search_module.SERPAPI_KEY, "q": "system status", "num": 1, "engine": "google"}
+        headers = None
+    else:
+        return {
+            "status": "skipped",
+            "summary": "Disabled",
+            "checkedAt": to_iso(checked_at),
+        }
+
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+        latency_ms = (time.perf_counter() - start) * 1000
+        if resp.ok:
+            return {
+                "status": "ready",
+                "summary": "Available",
+                "checkedAt": to_iso(checked_at),
+                "latencyMs": round(latency_ms, 1),
+            }
+        return {
+            "status": "degraded",
+            "summary": "Responding with errors",
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": f"status={resp.status_code}",
+        }
+    except requests.exceptions.Timeout as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.warning("health.probe.timeout service=search_backend error=%s", exc)
+        return {
+            "status": "degraded",
+            "summary": "Slow response",
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": _truncate(str(exc), 140),
+        }
+    except requests.exceptions.RequestException as exc:
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.warning("health.probe.failed service=search_backend error=%s", exc)
+        return {
+            "status": "unavailable",
+            "summary": "No response",
+            "checkedAt": to_iso(checked_at),
+            "latencyMs": round(latency_ms, 1),
+            "detail": _truncate(str(exc), 140),
+        }
+
+
+def _derive_overall_status(checks: Dict[str, Dict[str, Any]]) -> str:
+    relevant = [chk.get("status") for chk in checks.values() if chk.get("status") not in {"skipped", "checking"}]
+    if not relevant:
+        return "ready"
+    if any(status == "unavailable" for status in relevant):
+        return "unavailable"
+    if any(status == "degraded" for status in relevant):
+        return "degraded"
+    return "ready"
+
+
+def _compute_health_snapshot() -> dict[str, Any]:
+    probes = {
+        "primary_llm": _probe_primary_llm,
+        "fallback_llm": _probe_fallback_llm,
+        "search_backend": _probe_search_backend,
+    }
+    results: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=len(probes)) as executor:
+        future_map = {executor.submit(func): name for name, func in probes.items()}
+        for future in as_completed(future_map):
+            name = future_map[future]
+            try:
+                results[name] = future.result()
+            except Exception as exc:  # pragma: no cover - defensive catch
+                logger.exception("health.probe.exception service=%s error=%s", name, exc)
+                results[name] = {
+                    "status": "unavailable",
+                    "summary": "No response",
+                    "checkedAt": to_iso(datetime.utcnow()),
+                    "detail": _truncate(str(exc), 140),
+                }
+
+    status = _derive_overall_status(results)
+    updated_at = datetime.utcnow()
+    expires_at = updated_at + timedelta(seconds=HEALTH_CACHE_TTL_SECONDS)
+    snapshot = {
+        "status": status,
+        "updatedAt": to_iso(updated_at),
+        "expiresAt": to_iso(expires_at),
+        "cacheTtlSeconds": HEALTH_CACHE_TTL_SECONDS,
+        "suggestedRefreshSeconds": max(10, HEALTH_CACHE_TTL_SECONDS // 2),
+        "checks": results,
+    }
+    return snapshot
+
+
 def health():
-    return jsonify({"status": "ok"}), 200
+    global _HEALTH_CACHE, _HEALTH_CACHE_EXPIRES_AT
+    force_refresh = request.args.get("refresh") in {"1", "true", "True"}
+    now = time.time()
+    with _HEALTH_CACHE_LOCK:
+        if not force_refresh and _HEALTH_CACHE and now < _HEALTH_CACHE_EXPIRES_AT:
+            return jsonify(_HEALTH_CACHE), 200
+
+    snapshot = _compute_health_snapshot()
+
+    with _HEALTH_CACHE_LOCK:
+        _HEALTH_CACHE = snapshot
+        _HEALTH_CACHE_EXPIRES_AT = time.time() + HEALTH_CACHE_TTL_SECONDS
+
+    return jsonify(snapshot), 200
 
 def chat():
     data = request.get_json(silent=True) or {}

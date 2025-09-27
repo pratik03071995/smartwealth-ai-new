@@ -1,6 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import axios from 'axios'
-import { apiBase } from '../services/api'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   ResponsiveContainer,
@@ -15,7 +13,20 @@ import {
   Scatter,
 } from 'recharts'
 
-const API_BASE = apiBase
+import {
+  AssistantMsg,
+  Msg,
+  TablePayload,
+  TableColumn,
+  ChartPayload,
+  ChartFormat,
+  HealthSnapshot,
+  HealthCheckEntry,
+  SystemStatus,
+  useChatSession,
+  isAssistant,
+  submitFeedbackAPI,
+} from './chat/ChatSessionProvider'
 
 const compactCurrency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -64,49 +75,6 @@ const METRIC_LABELS: Record<string, string> = {
   relationship_strength: 'Relationship Strength',
   est_contract_value_usd_m: 'Contract Value (USDm)',
 }
-
-type TableColumn = { key: string; label: string }
-type TablePayload = { columns: TableColumn[]; rows: Record<string, unknown>[] }
-type ChartDatum = { label: string; value: number; key?: string }
-type ChartFormat = 'currency' | 'number' | 'percent'
-type ScatterDatum = { label: string; x: number; y: number; size?: number }
-
-type ChartPayload =
-  | { type: 'bar'; title: string; metric?: string; format?: ChartFormat; data: ChartDatum[] }
-  | {
-      type: 'scatter'
-      title: string
-      xKey: string
-      yKey: string
-      format?: { x?: ChartFormat; y?: ChartFormat; size?: ChartFormat }
-      data: ScatterDatum[]
-      sizeKey?: string
-    }
-
-type AssistantMsg = {
-  role: 'assistant'
-  id?: string
-  text: string
-  table?: TablePayload
-  chart?: ChartPayload | null
-  sql?: string | null
-  latencyMs?: number
-  prompt?: string
-  feedback?: 'up' | 'down' | null
-  plan?: Record<string, unknown> | null
-  followups?: string[] | null
-  tablePreview?: Record<string, unknown>[] | null
-  sourceLabel?: string | null
-  dataSource?: string | null
-  llmSource?: string | null
-  llmSourceRaw?: string | null
-  searchProvider?: string | null
-}
-
-type UserMsg = { role: 'user'; text: string }
-type Msg = AssistantMsg | UserMsg
-
-const isAssistant = (msg: Msg): msg is AssistantMsg => msg.role === 'assistant'
 
 function formatCell(value: unknown, key: string): React.ReactNode {
   if (value === null || value === undefined || value === '') return '—'
@@ -157,6 +125,39 @@ const BRAND_COLORS = {
   accent: '#EC4899',
 }
 
+const STATUS_CONFIG: Record<SystemStatus, { label: string; container: string; dot: string; textClass: string }> = {
+  checking: {
+    label: 'Setting up…',
+    container: 'border-[var(--border)]/70 bg-gradient-to-r from-[var(--brand2)]/18 via-[var(--panel)] to-[var(--brand1)]/12 shadow-[0_0_16px_rgba(123,91,251,0.22)]',
+    dot: 'border-2 border-current border-t-transparent',
+    textClass: 'text-[var(--brand2)]',
+  },
+  ready: {
+    label: 'Ready',
+    container: 'border-[var(--border)]/70 bg-[var(--panel)]/70',
+    dot: 'bg-emerald-400/90',
+    textClass: 'text-[var(--muted)]',
+  },
+  degraded: {
+    label: 'Warming up…',
+    container: 'border-amber-200/70 bg-amber-50/70 shadow-[0_0_18px_rgba(251,191,36,0.18)]',
+    dot: 'bg-amber-400/90 animate-pulse',
+    textClass: 'text-amber-600',
+  },
+  unavailable: {
+    label: 'Reconnecting…',
+    container: 'border-rose-200/70 bg-rose-50/70 shadow-[0_0_18px_rgba(244,63,94,0.18)]',
+    dot: 'bg-rose-500/90 animate-pulse',
+    textClass: 'text-rose-600',
+  },
+}
+
+const HEALTH_LABELS: Record<string, string> = {
+  primary_llm: 'Primary engine',
+  fallback_llm: 'Backup engine',
+  search_backend: 'Search',
+}
+
 function formatLatency(raw: number | undefined) {
   if (raw === undefined || Number.isNaN(raw)) return ''
   if (raw < 1000) return `${Math.round(raw)} ms`
@@ -167,40 +168,97 @@ function formatLatency(raw: number | undefined) {
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`
 }
 
-function createMessageId() {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    try {
-      return crypto.randomUUID()
-    } catch (_) {
-      // fall through to fallback id
-    }
-  }
-  return `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`
+type ChatProps = {
+  variant?: 'full' | 'embedded'
+  className?: string
 }
 
-const INITIAL_ASSISTANT: AssistantMsg = {
-  role: 'assistant',
-  text: 'Hi! Ask me about company fundamentals, earnings, scores, or vendor relationships. Try “Where is Meta headquartered?” or “Who are Nvidia’s customers?”.',
-  id: 'welcome',
-  feedback: null,
-  plan: null,
-  followups: null,
-}
-
-export default function Chat() {
-  const [messages, setMessages] = useState<Msg[]>([INITIAL_ASSISTANT])
+export default function Chat({ variant = 'full', className }: ChatProps) {
+  const {
+    messages,
+    isLoading,
+    pendingLatencyMs,
+    systemStatus,
+    healthSnapshot,
+    isHealthRefreshing,
+    refreshHealth,
+    sendMessage,
+    clearConversation,
+    updateMessages,
+  } = useChatSession()
   const [input, setInput] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
   const [chartSpec, setChartSpec] = useState<ChartPayload | null>(null)
   const [graphOpen, setGraphOpen] = useState(false)
   const [graphReady, setGraphReady] = useState(false)
-  const [pendingLatencyMs, setPendingLatencyMs] = useState(0)
   const [feedbackLoading, setFeedbackLoading] = useState<Record<string, boolean>>({})
   const endRef = useRef<HTMLDivElement | null>(null)
-  const pendingTimerRef = useRef<number | null>(null)
-  const pendingStartRef = useRef<number | null>(null)
-  const lastPromptRef = useRef('')
   const inputRef = useRef<HTMLInputElement | null>(null)
+
+  const outerClasses = useMemo(
+    () =>
+      [
+        'relative z-10',
+        variant === 'embedded' ? 'w-full' : 'mx-auto max-w-xl',
+        className ?? '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    [variant, className],
+  )
+
+  const scrollAreaMaxHeight = variant === 'embedded' ? 'max-h-[60vh]' : 'max-h-[28rem]'
+  const cardClasses = useMemo(
+    () =>
+      variant === 'embedded'
+        ? 'rounded-[20px] border border-[var(--border)] bg-[var(--panel)]/96 p-3 shadow-[0_30px_60px_rgba(17,21,41,0.24)] backdrop-blur'
+        : 'rounded-[22px] border border-[var(--border)] bg-[var(--panel)]/95 p-4 shadow-[0_24px_60px_rgba(19,24,52,0.16)] backdrop-blur',
+    [variant],
+  )
+
+  const statusHint = useMemo(() => {
+    if (!healthSnapshot?.checks) return ''
+    const segments = Object.entries(healthSnapshot.checks)
+      .map(([key, check]) => {
+        if (!check) return null
+        const status = String(check.status || '').toLowerCase()
+        if (status === 'skipped') return null
+        const summary = check.summary || (status ? status.charAt(0).toUpperCase() + status.slice(1) : '')
+        if (!summary) return null
+        const label = HEALTH_LABELS[key] || key.replace(/_/g, ' ')
+        return `${label}: ${summary}`
+      })
+      .filter(Boolean) as string[]
+    return segments.join(' • ')
+  }, [healthSnapshot])
+
+  const lastCheckedLabel = useMemo(() => {
+    if (!healthSnapshot?.updatedAt) return ''
+    try {
+      const value = new Date(healthSnapshot.updatedAt)
+      return value.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    } catch (_) {
+      return ''
+    }
+  }, [healthSnapshot?.updatedAt])
+
+  const statusTitle = useMemo(() => {
+    const parts: string[] = []
+    if (statusHint) parts.push(statusHint)
+    if (lastCheckedLabel) parts.push(`Checked ${lastCheckedLabel}`)
+    return parts.length ? parts.join('\n') : 'Click to rerun setup check.'
+  }, [statusHint, lastCheckedLabel])
+
+  const statusInfo = STATUS_CONFIG[systemStatus] ?? STATUS_CONFIG.ready
+  const showSpinner = systemStatus === 'checking'
+  const dotClassName = showSpinner
+    ? 'h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent'
+    : `h-1.5 w-1.5 rounded-full ${statusInfo.dot} ${
+        systemStatus === 'ready' && isHealthRefreshing ? 'animate-pulse' : ''
+      }`
+
+  const statusButtonDisabled = isHealthRefreshing || systemStatus === 'checking'
+  const sendDisabled =
+    isLoading || systemStatus === 'unavailable' || systemStatus === 'checking' || isHealthRefreshing
   const chartHighlights = useMemo(() => {
     if (!chartSpec) return null
     if (chartSpec.type === 'bar') {
@@ -239,32 +297,6 @@ export default function Chat() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
-
-  useEffect(() => {
-    const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
-    if (isLoading) {
-      pendingStartRef.current = now()
-      if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
-      pendingTimerRef.current = window.setInterval(() => {
-        if (pendingStartRef.current) {
-          setPendingLatencyMs(now() - pendingStartRef.current)
-        }
-      }, 120)
-      return () => {
-        if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
-      }
-    }
-
-    if (pendingTimerRef.current) {
-      window.clearInterval(pendingTimerRef.current)
-      pendingTimerRef.current = null
-    }
-    pendingStartRef.current = null
-    setPendingLatencyMs(0)
-    return () => {
-      if (pendingTimerRef.current) window.clearInterval(pendingTimerRef.current)
-    }
-  }, [isLoading])
 
   const renderTable = (table: TablePayload | undefined) => {
     if (!table || !table.rows?.length) return null
@@ -359,8 +391,8 @@ export default function Chat() {
     }
 
     try {
-      await axios.post(`${API_BASE}/chat/feedback`, payload)
-      setMessages((prev) =>
+      await submitFeedbackAPI(payload)
+      updateMessages((prev) =>
         prev.map((entry) =>
           isAssistant(entry) && entry.id === msg.id
             ? { ...entry, feedback: rating }
@@ -454,176 +486,24 @@ export default function Chat() {
     setTimeout(() => setGraphReady(true), 40)
   }
 
-  function clearConversation() {
-    setMessages([INITIAL_ASSISTANT])
+  const handleClearConversation = useCallback(() => {
+    clearConversation()
     setChartSpec(null)
     setGraphOpen(false)
     setFeedbackLoading({})
-  }
+  }, [clearConversation])
 
   async function send(messageOverride?: string) {
     const text = (messageOverride ?? input).trim()
-    if (!text || isLoading) return
-
+    if (!text || sendDisabled) return
     setInput('')
-    setIsLoading(true)
-
-    const assistantId = createMessageId()
-    lastPromptRef.current = text
-    const placeholder: AssistantMsg = {
-      role: 'assistant',
-      text: '',
-      id: assistantId,
-      feedback: null,
-      plan: null,
-      followups: null,
-      table: undefined,
-      chart: null,
-      tablePreview: null,
-      sql: null,
-      latencyMs: undefined,
-      prompt: lastPromptRef.current,
-      sourceLabel: null,
-      dataSource: null,
-      llmSource: null,
-      llmSourceRaw: null,
-      searchProvider: null,
-    }
-
-    setMessages((m) => [...m, { role: 'user', text }, placeholder])
-
-    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
-
-    try {
-      const response = await fetch(`${API_BASE}/chat/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-        },
-        body: JSON.stringify({ message: text }),
-      })
-
-      if (!response.ok || !response.body) {
-        throw new Error(`Streaming request failed (${response.status})`)
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let streamingText = ''
-      let finished = false
-      let currentAssistantId = assistantId
-      const appendDelta = (delta: string) => {
-        streamingText += delta
-        setMessages((prev) =>
-          prev.map((entry) =>
-            isAssistant(entry) && entry.id === currentAssistantId
-              ? { ...entry, text: streamingText }
-              : entry,
-          ),
-        )
-      }
-
-      while (!finished) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-
-        let boundary = buffer.indexOf('\n\n')
-        while (boundary !== -1) {
-          const rawEvent = buffer.slice(0, boundary)
-          buffer = buffer.slice(boundary + 2)
-          boundary = buffer.indexOf('\n\n')
-
-          const lines = rawEvent.split('\n')
-          const dataLine = lines.find((line) => line.startsWith('data:'))
-          if (!dataLine) continue
-          const jsonPayload = dataLine.slice(5).trim()
-          if (!jsonPayload) continue
-
-          let payload: any
-          try {
-            payload = JSON.parse(jsonPayload)
-          } catch (parseErr) {
-            console.warn('Failed to parse SSE payload', parseErr)
-            continue
-          }
-
-          if (payload.type === 'delta' && typeof payload.delta === 'string') {
-            appendDelta(payload.delta)
-          } else if (payload.type === 'result') {
-            const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
-            const latencyMs = Math.max(0, endedAt - startedAt)
-            const data = payload.data ?? {}
-            currentAssistantId = (data.messageId as string) || currentAssistantId
-            const sourceLabel = (data.sourceLabel as string | undefined) ?? null
-            const dataSource = (data.data_source as string | undefined) ?? null
-            const llmSource = (data.llmSource as string | undefined) ?? null
-            const llmSourceRaw = (data.llmSourceRaw as string | undefined) ?? null
-            const searchProvider = (data.search_provider as string | undefined) ?? null
-            const finalText =
-              typeof data.reply === 'string' && data.reply.length
-                ? data.reply
-                : streamingText || 'I could not craft a response for that.'
-
-            setMessages((prev) =>
-              prev.map((entry) =>
-                isAssistant(entry) && entry.id === assistantId
-                  ? {
-                      ...entry,
-                      id: currentAssistantId,
-                      text: finalText,
-                      table: data.table,
-                      chart: data.chart,
-                      sql: data.sql,
-                      latencyMs,
-                      plan: data.plan ?? null,
-                      followups: (data.followups as string[] | undefined) ?? null,
-                      tablePreview: (data.tablePreview as Record<string, unknown>[] | undefined) ?? null,
-                      sourceLabel,
-                      dataSource,
-                      llmSource,
-                      llmSourceRaw,
-                      searchProvider,
-                    }
-                  : entry,
-              ),
-            )
-          } else if (payload.type === 'error') {
-            setMessages((prev) =>
-              prev.map((entry) =>
-                isAssistant(entry) && entry.id === assistantId
-                  ? {
-                      ...entry,
-                      text: payload.error || 'Error reaching API.',
-                    }
-                  : entry,
-              ),
-            )
-          } else if (payload.type === 'end') {
-            finished = true
-            break
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Streaming chat failed', err)
-      setMessages((prev) =>
-        prev.map((entry) =>
-          isAssistant(entry) && entry.id === assistantId
-            ? { ...entry, text: 'Error reaching API.' }
-            : entry,
-        ),
-      )
-    } finally {
-      setIsLoading(false)
-    }
+    await sendMessage(text)
+    setTimeout(() => inputRef.current?.focus(), 0)
   }
 
   return (
-    <div className="relative z-10 mx-auto max-w-xl">
-      <div className="rounded-[22px] border border-[var(--border)] bg-[var(--panel)]/95 p-4 shadow-[0_24px_60px_rgba(19,24,52,0.16)] backdrop-blur">
+    <div className={outerClasses}>
+      <div className={cardClasses}>
         <div className="sticky top-0 z-20 bg-[var(--panel)]/92 px-4 pt-2 backdrop-blur">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -632,6 +512,18 @@ export default function Chat() {
               </span>
             </div>
             <div className="flex items-center gap-2 text-[10px] font-medium text-[var(--muted)]">
+              <button
+                type="button"
+                onClick={() => refreshHealth({ force: true })}
+                disabled={statusButtonDisabled}
+                title={statusTitle}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-[6px] font-semibold transition ${
+                  statusInfo.container
+                } ${statusInfo.textClass} ${statusButtonDisabled ? 'cursor-not-allowed opacity-70' : 'hover:opacity-90'}`}
+              >
+                <span className={dotClassName} />
+                <span>{statusInfo.label}</span>
+              </button>
               {isLoading ? (
                 <motion.span
                   initial={{ opacity: 0, y: -2 }}
@@ -641,15 +533,10 @@ export default function Chat() {
                   <span className="text-[var(--brand2)]">●</span>
                   <span>{formatLatency(pendingLatencyMs) || '…'}</span>
                 </motion.span>
-              ) : (
-                <span className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/70 bg-[var(--panel)]/70 px-3 py-[6px] text-[var(--muted)]">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400/90" />
-                  Ready
-                </span>
-              )}
+              ) : null}
               {messages.length > 1 ? (
                 <button
-                  onClick={clearConversation}
+                  onClick={handleClearConversation}
                   className="inline-flex items-center gap-1 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/70 px-3 py-[6px] text-[10px] font-semibold text-[var(--brand2)] transition hover:border-[var(--brand2)]/60 hover:text-[var(--text)]"
                 >
                   Clear
@@ -660,7 +547,7 @@ export default function Chat() {
           <div className="mt-3 h-px w-full bg-gradient-to-r from-transparent via-[var(--brand2)]/35 to-transparent" />
         </div>
         {/* SCROLLABLE feed */}
-        <div className="flex max-h-[28rem] flex-col gap-3 overflow-y-auto px-4 pb-4 pt-3 pr-4 scroll-slim">
+        <div className={`flex ${scrollAreaMaxHeight} flex-col gap-3 overflow-y-auto px-4 pb-4 pt-3 pr-4 scroll-slim`}>
           {messages.map((m, i) => (
             <motion.div
               key={i}
@@ -718,16 +605,23 @@ export default function Chat() {
             placeholder=" "
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => (e.key === 'Enter' ? send() : undefined)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !sendDisabled) {
+                e.preventDefault()
+                send()
+              }
+            }}
             disabled={isLoading}
             ref={inputRef}
           />
           <motion.button
-            onClick={() => send()}
-            whileTap={{ scale: 0.98 }}
-            disabled={isLoading}
+            onClick={() => {
+              if (!sendDisabled) send()
+            }}
+            whileTap={sendDisabled ? { scale: 1 } : { scale: 0.98 }}
+            disabled={sendDisabled}
             className={`rounded-xl bg-[var(--brand2)] px-4 py-3 font-semibold text-[var(--btnText)] shadow-glow hover:opacity-90 ${
-              isLoading ? 'opacity-60' : ''
+              sendDisabled ? 'cursor-not-allowed opacity-60' : ''
             }`}
           >
             {isLoading ? 'Thinking…' : 'Send'}
