@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from datetime import datetime, timedelta, date
 from decimal import Decimal
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, Callable
 
 import requests
 from dateutil import parser as dateparser
@@ -1649,6 +1649,7 @@ def _ollama_chat_request(
     messages: list[dict[str, str]],
     temperature: float,
     max_tokens: int,
+    stream_handler: Optional[Callable[[str], None]] = None,
 ) -> str:
     base_urls = config.get("base_urls") or [config.get("base_url")]
     model_name = config.get("model")
@@ -1661,6 +1662,8 @@ def _ollama_chat_request(
             "temperature": temperature,
         },
     }
+    if stream_handler:
+        payload["stream"] = True
 
     last_error: Optional[Exception] = None
     for base_url in base_urls:
@@ -1672,8 +1675,47 @@ def _ollama_chat_request(
             logger.info(
                 "ollama.request.start url=%s model=%s timeout=%s", chat_url, model_name, timeout
             )
-            resp = session.post(chat_url, json=payload, timeout=timeout)
+            resp = session.post(
+                chat_url,
+                json=payload,
+                timeout=timeout,
+                stream=bool(stream_handler),
+            )
             resp.raise_for_status()
+            if stream_handler:
+                accumulated: list[str] = []
+                try:
+                    for raw_line in resp.iter_lines(decode_unicode=True):
+                        if not raw_line:
+                            continue
+                        try:
+                            chunk = json.loads(raw_line)
+                        except json.JSONDecodeError:
+                            logger.warning("ollama.stream.invalid_chunk line=%s", raw_line)
+                            continue
+                        if not isinstance(chunk, dict):
+                            continue
+                        token_text = chunk.get("response")
+                        if token_text:
+                            stream_handler(token_text)
+                            accumulated.append(token_text)
+                        if chunk.get("done"):
+                            break
+                finally:
+                    resp.close()
+                text_value = "".join(accumulated).strip()
+                if not text_value:
+                    raise RuntimeError("Empty response from Ollama stream")
+                record_llm_provider("ollama")
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.info(
+                    "ollama.request.success url=%s latency_ms=%.0f response_len=%s (streamed)",
+                    chat_url,
+                    elapsed_ms,
+                    len(text_value),
+                )
+                return text_value
+
             data = resp.json()
             content: Optional[str] = None
             if isinstance(data.get("message"), dict):
@@ -1726,6 +1768,7 @@ def _deepseek_chat_request(
     messages: list[dict[str, str]],
     temperature: float,
     max_tokens: int,
+    stream_handler: Optional[Callable[[str], None]] = None,
 ) -> str:
     api_base = (config.get("api_base") or "https://api.deepseek.com/v1").rstrip("/")
     api_key = config.get("api_key")
@@ -1739,12 +1782,14 @@ def _deepseek_chat_request(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    payload = {
+    payload: dict[str, Any] = {
         "model": model_name,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if stream_handler:
+        payload["stream"] = True
 
     start_time = time.perf_counter()
     logger.info(
@@ -1754,7 +1799,13 @@ def _deepseek_chat_request(
         _summarize_messages(messages, per_message_limit=80),
     )
     try:
-        resp = session.post(endpoint, headers=headers, json=payload, timeout=timeout)
+        resp = session.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+            stream=bool(stream_handler),
+        )
     except Exception as exc:
         logger.exception(
             "deepseek.request.transport_failed model=%s latency_ms=%.0f error=%s",
@@ -1771,13 +1822,69 @@ def _deepseek_chat_request(
     try:
         resp.raise_for_status()
     except Exception as http_exc:
+        body_preview = None
+        if hasattr(resp, "text"):
+            try:
+                body_preview = resp.text[:500]
+            except Exception:
+                body_preview = None
         logger.exception(
             "deepseek.request.http_error status=%s latency_ms=%.0f body=%s",
             getattr(resp, "status_code", "?"),
             elapsed_ms,
-            resp.text[:500] if hasattr(resp, "text") else None,
+            body_preview,
         )
         raise
+
+    if stream_handler:
+        accumulated_chunks: list[str] = []
+        try:
+            for raw_line in resp.iter_lines(decode_unicode=True):
+                if not raw_line:
+                    continue
+                line = raw_line.strip()
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                if not line:
+                    continue
+                if line == "[DONE]":
+                    break
+                try:
+                    payload_obj = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning("deepseek.stream.invalid_chunk line=%s", line)
+                    continue
+                choices = payload_obj.get("choices") if isinstance(payload_obj, dict) else None
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                token_text = None
+                if isinstance(delta, dict):
+                    token_text = delta.get("content")
+                if token_text:
+                    stream_handler(token_text)
+                    accumulated_chunks.append(token_text)
+                finish_reason = choice.get("finish_reason")
+                if finish_reason:
+                    break
+        finally:
+            resp.close()
+        combined = "".join(accumulated_chunks).strip()
+        if combined:
+            logger.info(
+                "deepseek.request.success model=%s latency_ms=%.0f response_len=%s (streamed)",
+                model_name,
+                (time.perf_counter() - start_time) * 1000,
+                len(combined),
+            )
+            record_llm_provider("deepseek")
+            return combined
+        logger.error("deepseek.stream.empty_result model=%s", model_name)
+        raise RuntimeError("Empty response from DeepSeek stream")
+
     data = resp.json()
 
     choices = data.get("choices") if isinstance(data, dict) else None
@@ -1811,7 +1918,13 @@ def _deepseek_chat_request(
     return result
 
 
-def _llm_chat(messages: list[dict[str, str]], temperature: float = LLM_TEMPERATURE, max_tokens: int = 700) -> str:
+def _llm_chat(
+    messages: list[dict[str, str]],
+    temperature: float = LLM_TEMPERATURE,
+    max_tokens: int = 700,
+    *,
+    stream_handler: Optional[Callable[[str], None]] = None,
+) -> str:
     mode, client, model_info = _ensure_llm_client()
     record_llm_provider("none")
     start_time = time.perf_counter()
@@ -1829,7 +1942,14 @@ def _llm_chat(messages: list[dict[str, str]], temperature: float = LLM_TEMPERATU
 
     if mode == "ollama":
         record_llm_provider("ollama")
-        result = _ollama_chat_request(client, model_info, messages, temperature, max_tokens)
+        result = _ollama_chat_request(
+            client,
+            model_info,
+            messages,
+            temperature,
+            max_tokens,
+            stream_handler=stream_handler,
+        )
         logger.info(
             "llm.chat.success provider=ollama latency_ms=%.0f",
             (time.perf_counter() - start_time) * 1000,
@@ -1838,7 +1958,14 @@ def _llm_chat(messages: list[dict[str, str]], temperature: float = LLM_TEMPERATU
 
     if mode == "deepseek":
         try:
-            result = _deepseek_chat_request(client, model_info, messages, temperature, max_tokens)
+            result = _deepseek_chat_request(
+                client,
+                model_info,
+                messages,
+                temperature,
+                max_tokens,
+                stream_handler=stream_handler,
+            )
             logger.info(
                 "llm.chat.success provider=deepseek latency_ms=%.0f",
                 (time.perf_counter() - start_time) * 1000,
@@ -1851,7 +1978,14 @@ def _llm_chat(messages: list[dict[str, str]], temperature: float = LLM_TEMPERATU
                 try:
                     fallback_session = requests.Session()
                     logger.info("llm.chat.fallback_to_ollama")
-                    result = _ollama_chat_request(fallback_session, fallback_config, messages, temperature, max_tokens)
+                    result = _ollama_chat_request(
+                        fallback_session,
+                        fallback_config,
+                        messages,
+                        temperature,
+                        max_tokens,
+                        stream_handler=stream_handler,
+                    )
                     logger.info(
                         "llm.chat.success provider=ollama_fallback latency_ms=%.0f",
                         (time.perf_counter() - start_time) * 1000,

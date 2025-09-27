@@ -2,6 +2,7 @@ from flask import Blueprint
 
 from functions import (
     chat_clean,
+    chat_stream,
     chat_feedback,
     companies_profiles,
     earnings,
@@ -20,6 +21,7 @@ bp = Blueprint("api", __name__)
 
 bp.add_url_rule("/api/health", view_func=health, methods=["GET"])
 bp.add_url_rule("/api/chat", view_func=chat_clean, methods=["POST"])
+bp.add_url_rule("/api/chat/stream", view_func=chat_stream, methods=["POST"])
 bp.add_url_rule("/api/chat/feedback", view_func=chat_feedback, methods=["POST"])
 
 bp.add_url_rule("/api/earnings/week", view_func=earnings_week, methods=["GET"])
