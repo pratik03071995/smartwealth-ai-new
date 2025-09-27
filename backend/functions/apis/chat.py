@@ -5,15 +5,29 @@ import json
 import math
 import random
 import re
+import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timedelta, date
 from decimal import Decimal
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, Callable
 
 import requests
 from dateutil import parser as dateparser
 from flask import jsonify, request
+from contextvars import ContextVar
+
+try:
+    from openai import APIError as OpenAIError, AzureOpenAI, OpenAI
+except ImportError:  # pragma: no cover - optional dependency
+    OpenAI = None  # type: ignore[assignment]
+    AzureOpenAI = None  # type: ignore[assignment]
+
+    class OpenAIError(Exception):
+        """Fallback error type when the OpenAI SDK is unavailable."""
+
+        pass
 
 from . import settings
 from .databricks import db_cursor
@@ -58,6 +72,10 @@ AZURE_OPENAI_API_KEY = settings.AZURE_OPENAI_API_KEY
 AZURE_OPENAI_DEPLOYMENT = settings.AZURE_OPENAI_DEPLOYMENT
 AZURE_OPENAI_API_VERSION = settings.AZURE_OPENAI_API_VERSION
 OPENAI_API_KEY = settings.OPENAI_API_KEY
+DEEPSEEK_API_BASE = (settings.DEEPSEEK_API_BASE or "").rstrip("/") or "https://api.deepseek.com/v1"
+DEEPSEEK_API_KEY = settings.DEEPSEEK_API_KEY
+DEEPSEEK_MODEL = settings.DEEPSEEK_MODEL
+DEEPSEEK_TIMEOUT = settings.DEEPSEEK_TIMEOUT
 
 # Common stopwords that should not be treated as stock symbols
 SYMBOL_STOPWORDS = {
@@ -69,6 +87,20 @@ SYMBOL_STOPWORDS = {
     "COMPANIES", "STOCKS", "SHARES", "EQUITY", "MARKET", "FINANCIAL", "REVENUE",
     "PROFIT", "EARNINGS", "GROWTH", "VALUE", "PRICE", "VOLUME", "RETURN", "YIELD"
 }
+
+
+def _truncate(text: str, limit: int = 160) -> str:
+    cleaned = (text or "").replace("\n", " ").strip()
+    return cleaned if len(cleaned) <= limit else f"{cleaned[: limit - 1]}…"
+
+
+def _summarize_messages(messages: list[dict[str, str]], per_message_limit: int = 120) -> str:
+    summary_parts: list[str] = []
+    for msg in messages:
+        role = msg.get("role", "?")
+        content = _truncate(str(msg.get("content", "")), per_message_limit)
+        summary_parts.append(f"{role}:{content}")
+    return " | ".join(summary_parts)
 
 # Company name to ticker symbol mapping
 COMPANY_TO_TICKER = {
@@ -945,17 +977,120 @@ class LLMConfigurationError(RuntimeError):
 
 _LLM_CLIENT_CACHE: Optional[tuple[str, Any, Any]] = None
 
+_LLM_PROVIDER_TOKEN: ContextVar[str] = ContextVar("llm_provider", default="none")
+
+
+def record_llm_provider(provider: str) -> None:
+    """Store the last successful LLM provider for the active request."""
+    _LLM_PROVIDER_TOKEN.set((provider or "none").lower())
+
+
+def reset_llm_provider() -> None:
+    """Reset provider tracking for a new request lifecycle."""
+    record_llm_provider("none")
+
+
+def get_last_llm_provider() -> str:
+    return _LLM_PROVIDER_TOKEN.get()
+
+
+def get_llm_source_label() -> str:
+    mapping = {
+        "deepseek": "DeepSeek",
+        "ollama": "Ollama",
+        "openai": "OpenAI",
+        "azure-openai": "Azure OpenAI",
+        "mock": "Mock",
+        "heuristic": "Heuristic",
+        "none": "None",
+        "": "None",
+    }
+    raw = get_last_llm_provider()
+    return mapping.get(raw, raw.title() if raw else "None")
+
+
+def build_source_label(data_source: Optional[str], search_provider: Optional[str], llm_label: str) -> str:
+    data_source = (data_source or "").lower()
+    provider_label = (search_provider or "").strip()
+    parts: list[str] = []
+
+    if data_source:
+        if data_source == "web_search":
+            label = provider_label or "Web Search"
+            parts.append(f"Web Search ({label})" if provider_label else "Web Search")
+        elif data_source == "financial_api_enhanced":
+            parts.append("Financial API")
+        elif data_source == "database":
+            parts.append("SmartWealth Database")
+        else:
+            parts.append(data_source.replace("_", " ").title())
+    elif provider_label:
+        parts.append(f"Web Search ({provider_label})")
+
+    llm_label = llm_label.strip()
+    if llm_label and llm_label not in {"None"}:
+        if llm_label == "Heuristic":
+            parts.append("Heuristic Router")
+        else:
+            parts.append(f"LLM: {llm_label}")
+
+    if not parts:
+        return "Source: System"
+    return f"Source: {' | '.join(parts)}"
+
 
 def _ensure_llm_client() -> tuple[str, Any, Any]:
     global _LLM_CLIENT_CACHE
     if _LLM_CLIENT_CACHE:
+        logger.debug("llm.ensure_cache_hit mode=%s", _LLM_CLIENT_CACHE[0])
         return _LLM_CLIENT_CACHE
 
-    if LLM_MODE == "mock":
+    mode_pref = (LLM_MODE or "").strip().lower()
+    logger.info("llm.ensure mode_pref=%s", mode_pref or "default")
+
+    if mode_pref == "mock":
+        logger.info("llm.ensure using mock provider")
         _LLM_CLIENT_CACHE = ("mock", None, None)
         return _LLM_CLIENT_CACHE
 
-    if OLLAMA_BASE_URL:
+    allow_deepseek = mode_pref in {"", "deepseek"}
+    if DEEPSEEK_API_KEY and allow_deepseek:
+        session = requests.Session()
+        fallback_config: Optional[dict[str, Any]] = None
+        if OLLAMA_BASE_URL:
+            base = OLLAMA_BASE_URL.rstrip("/")
+            fallbacks: list[str] = []
+            if OLLAMA_FALLBACK_BASE_URL:
+                fallbacks = [OLLAMA_FALLBACK_BASE_URL.rstrip("/")]
+            elif "host.docker.internal" in base:
+                fallbacks.append("http://172.17.0.1:11434")
+            fallback_config = {
+                "base_urls": [base] + fallbacks,
+                "model": OLLAMA_MODEL,
+                "timeout": OLLAMA_TIMEOUT,
+            }
+        config = {
+            "api_base": DEEPSEEK_API_BASE.rstrip("/") if DEEPSEEK_API_BASE else "https://api.deepseek.com/v1",
+            "api_key": DEEPSEEK_API_KEY,
+            "model": DEEPSEEK_MODEL,
+            "timeout": DEEPSEEK_TIMEOUT,
+            "fallback": fallback_config,
+        }
+        logger.info(
+            "llm.ensure selected=deepseek timeout=%s fallback=%s",
+            config["timeout"],
+            bool(fallback_config),
+        )
+        _LLM_CLIENT_CACHE = ("deepseek", session, config)
+        return _LLM_CLIENT_CACHE
+
+    if mode_pref == "deepseek" and not DEEPSEEK_API_KEY:
+        raise LLMConfigurationError(
+            "LLM_MODE is set to 'deepseek' but DEEPSEEK_API_KEY is not configured."
+        )
+
+    allow_ollama = mode_pref in {"", "ollama", "deepseek"}
+    if OLLAMA_BASE_URL and allow_ollama:
         base = OLLAMA_BASE_URL.rstrip("/")
         fallbacks: list[str] = []
         if OLLAMA_FALLBACK_BASE_URL:
@@ -968,10 +1103,15 @@ def _ensure_llm_client() -> tuple[str, Any, Any]:
             "model": OLLAMA_MODEL,
             "timeout": OLLAMA_TIMEOUT,
         }
+        logger.info(
+            "llm.ensure selected=ollama timeout=%s fallback_count=%s",
+            config["timeout"],
+            len(config["base_urls"]) - 1,
+        )
         _LLM_CLIENT_CACHE = ("ollama", session, config)
         return _LLM_CLIENT_CACHE
 
-    if AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY and AZURE_OPENAI_DEPLOYMENT:
+    if AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY and AZURE_OPENAI_DEPLOYMENT and mode_pref in {"", "azure"}:
         if AzureOpenAI is None:
             raise LLMConfigurationError(
                 "Azure OpenAI configured but 'openai' package is not installed. Run 'pip install openai'."
@@ -981,15 +1121,17 @@ def _ensure_llm_client() -> tuple[str, Any, Any]:
             api_version=AZURE_OPENAI_API_VERSION,
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
         )
+        logger.info("llm.ensure selected=azure deployment=%s", AZURE_OPENAI_DEPLOYMENT)
         _LLM_CLIENT_CACHE = ("azure", client, AZURE_OPENAI_DEPLOYMENT)
         return _LLM_CLIENT_CACHE
 
-    if OPENAI_API_KEY:
+    if OPENAI_API_KEY and mode_pref in {"", "openai"}:
         if OpenAI is None:
             raise LLMConfigurationError(
                 "OpenAI API key provided but 'openai' package is not installed. Run 'pip install openai'."
             )
         client = OpenAI(api_key=OPENAI_API_KEY)
+        logger.info("llm.ensure selected=openai model=%s", OPENAI_MODEL)
         _LLM_CLIENT_CACHE = ("openai", client, OPENAI_MODEL)
         return _LLM_CLIENT_CACHE
 
@@ -1461,6 +1603,7 @@ def _heuristic_plan_data(prompt: str) -> dict[str, Any]:
 
 
 def _mock_llm_response(messages: list[dict[str, str]]) -> str:
+    record_llm_provider("mock")
     last = messages[-1]["content"] if messages else ""
     if not last:
         return "I'm ready to help with company fundamentals."
@@ -1500,65 +1643,358 @@ def _mock_llm_response(messages: list[dict[str, str]]) -> str:
     return json.dumps(plan)
 
 
-def _llm_chat(messages: list[dict[str, str]], temperature: float = LLM_TEMPERATURE, max_tokens: int = 700) -> str:
+def _ollama_chat_request(
+    session: requests.Session,
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    temperature: float,
+    max_tokens: int,
+    stream_handler: Optional[Callable[[str], None]] = None,
+) -> str:
+    base_urls = config.get("base_urls") or [config.get("base_url")]
+    model_name = config.get("model")
+    timeout = config.get("timeout", OLLAMA_TIMEOUT)
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": temperature,
+        },
+    }
+    if stream_handler:
+        payload["stream"] = True
+
+    last_error: Optional[Exception] = None
+    for base_url in base_urls:
+        if not base_url:
+            continue
+        chat_url = f"{base_url}/api/chat"
+        try:
+            start_time = time.perf_counter()
+            logger.info(
+                "ollama.request.start url=%s model=%s timeout=%s", chat_url, model_name, timeout
+            )
+            resp = session.post(
+                chat_url,
+                json=payload,
+                timeout=timeout,
+                stream=bool(stream_handler),
+            )
+            resp.raise_for_status()
+            if stream_handler:
+                accumulated: list[str] = []
+                try:
+                    for raw_line in resp.iter_lines(decode_unicode=True):
+                        if not raw_line:
+                            continue
+                        try:
+                            chunk = json.loads(raw_line)
+                        except json.JSONDecodeError:
+                            logger.warning("ollama.stream.invalid_chunk line=%s", raw_line)
+                            continue
+                        if not isinstance(chunk, dict):
+                            continue
+                        token_text = chunk.get("response")
+                        if token_text:
+                            stream_handler(token_text)
+                            accumulated.append(token_text)
+                        if chunk.get("done"):
+                            break
+                finally:
+                    resp.close()
+                text_value = "".join(accumulated).strip()
+                if not text_value:
+                    raise RuntimeError("Empty response from Ollama stream")
+                record_llm_provider("ollama")
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.info(
+                    "ollama.request.success url=%s latency_ms=%.0f response_len=%s (streamed)",
+                    chat_url,
+                    elapsed_ms,
+                    len(text_value),
+                )
+                return text_value
+
+            data = resp.json()
+            content: Optional[str] = None
+            if isinstance(data.get("message"), dict):
+                content = data["message"].get("content")
+            if not content and isinstance(data.get("messages"), list):
+                parts = [m.get("content", "") for m in data["messages"] if m.get("role") == "assistant"]
+                content = "".join(parts).strip() if parts else None
+            if not content and "response" in data:
+                content = str(data.get("response"))
+            if not content:
+                raise RuntimeError("Empty response from Ollama")
+            record_llm_provider("ollama")
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.info(
+                "ollama.request.success url=%s latency_ms=%.0f response_len=%s",
+                chat_url,
+                elapsed_ms,
+                len(content.strip()) if isinstance(content, str) else None,
+            )
+            return content.strip()
+        except requests.HTTPError as e:
+            last_error = e
+            status = e.response.status_code if e.response else None
+            logger.exception(
+                "ollama.request.http_error url=%s status=%s error=%s", chat_url, status, e
+            )
+            if status == 404:
+                try:
+                    content = _ollama_generate_fallback(session, base_url, model_name, messages, temperature, timeout)
+                    if content:
+                        record_llm_provider("ollama")
+                        return content.strip()
+                except Exception as inner:
+                    last_error = inner
+                    logger.error("Ollama generate fallback failed via %s: %s", base_url, inner)
+            continue
+        except requests.RequestException as e:
+            last_error = e
+            logger.exception("ollama.request.transport_failed url=%s error=%s", chat_url, e)
+            continue
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No valid Ollama base URL configured")
+
+
+def _deepseek_chat_request(
+    session: requests.Session,
+    config: dict[str, Any],
+    messages: list[dict[str, str]],
+    temperature: float,
+    max_tokens: int,
+    stream_handler: Optional[Callable[[str], None]] = None,
+) -> str:
+    api_base = (config.get("api_base") or "https://api.deepseek.com/v1").rstrip("/")
+    api_key = config.get("api_key")
+    model_name = config.get("model") or DEEPSEEK_MODEL
+    timeout = config.get("timeout", DEEPSEEK_TIMEOUT)
+    if not api_key:
+        raise LLMConfigurationError("DeepSeek API key missing.")
+
+    endpoint = f"{api_base}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload: dict[str, Any] = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if stream_handler:
+        payload["stream"] = True
+
+    start_time = time.perf_counter()
+    logger.info(
+        "deepseek.request.start model=%s timeout=%s messages=%s",
+        model_name,
+        timeout,
+        _summarize_messages(messages, per_message_limit=80),
+    )
+    try:
+        resp = session.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+            stream=bool(stream_handler),
+        )
+    except Exception as exc:
+        logger.exception(
+            "deepseek.request.transport_failed model=%s latency_ms=%.0f error=%s",
+            model_name,
+            (time.perf_counter() - start_time) * 1000,
+            exc,
+        )
+        raise
+
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    logger.info(
+        "deepseek.request.response status=%s latency_ms=%.0f", resp.status_code, elapsed_ms
+    )
+    try:
+        resp.raise_for_status()
+    except Exception as http_exc:
+        body_preview = None
+        if hasattr(resp, "text"):
+            try:
+                body_preview = resp.text[:500]
+            except Exception:
+                body_preview = None
+        logger.exception(
+            "deepseek.request.http_error status=%s latency_ms=%.0f body=%s",
+            getattr(resp, "status_code", "?"),
+            elapsed_ms,
+            body_preview,
+        )
+        raise
+
+    if stream_handler:
+        accumulated_chunks: list[str] = []
+        try:
+            for raw_line in resp.iter_lines(decode_unicode=True):
+                if not raw_line:
+                    continue
+                line = raw_line.strip()
+                if line.startswith("data:"):
+                    line = line[5:].strip()
+                if not line:
+                    continue
+                if line == "[DONE]":
+                    break
+                try:
+                    payload_obj = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning("deepseek.stream.invalid_chunk line=%s", line)
+                    continue
+                choices = payload_obj.get("choices") if isinstance(payload_obj, dict) else None
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                token_text = None
+                if isinstance(delta, dict):
+                    token_text = delta.get("content")
+                if token_text:
+                    stream_handler(token_text)
+                    accumulated_chunks.append(token_text)
+                finish_reason = choice.get("finish_reason")
+                if finish_reason:
+                    break
+        finally:
+            resp.close()
+        combined = "".join(accumulated_chunks).strip()
+        if combined:
+            logger.info(
+                "deepseek.request.success model=%s latency_ms=%.0f response_len=%s (streamed)",
+                model_name,
+                (time.perf_counter() - start_time) * 1000,
+                len(combined),
+            )
+            record_llm_provider("deepseek")
+            return combined
+        logger.error("deepseek.stream.empty_result model=%s", model_name)
+        raise RuntimeError("Empty response from DeepSeek stream")
+
+    data = resp.json()
+
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not choices:
+        logger.error("deepseek.request.empty_choices model=%s payload=%s", model_name, data)
+        raise RuntimeError("Empty response from DeepSeek")
+
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content: Optional[str] = None
+    if isinstance(message, dict):
+        content = message.get("content")
+        if not content:
+            reasoning = message.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning.strip():
+                content = reasoning
+    if not content:
+        content = choices[0].get("text") if isinstance(choices[0], dict) else None
+
+    if not content:
+        logger.error("deepseek.request.missing_content model=%s raw=%s", model_name, data)
+        raise RuntimeError("DeepSeek response missing content")
+
+    record_llm_provider("deepseek")
+    result = str(content).strip()
+    logger.info(
+        "deepseek.request.success model=%s latency_ms=%.0f response_len=%s",
+        model_name,
+        (time.perf_counter() - start_time) * 1000,
+        len(result),
+    )
+    return result
+
+
+def _llm_chat(
+    messages: list[dict[str, str]],
+    temperature: float = LLM_TEMPERATURE,
+    max_tokens: int = 700,
+    *,
+    stream_handler: Optional[Callable[[str], None]] = None,
+) -> str:
     mode, client, model_info = _ensure_llm_client()
+    record_llm_provider("none")
+    start_time = time.perf_counter()
+    logger.info(
+        "llm.chat.start mode=%s temperature=%s max_tokens=%s messages=%s",
+        mode,
+        temperature,
+        max_tokens,
+        _summarize_messages(messages),
+    )
 
     if mode == "mock":
+        logger.info("llm.chat.using_mock")
         return _mock_llm_response(messages)
 
     if mode == "ollama":
-        base_urls = model_info.get("base_urls") or [model_info.get("base_url")]
-        model_name = model_info.get("model")
-        timeout = model_info.get("timeout", OLLAMA_TIMEOUT)
-        payload = {
-            "model": model_name,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-            },
-        }
+        record_llm_provider("ollama")
+        result = _ollama_chat_request(
+            client,
+            model_info,
+            messages,
+            temperature,
+            max_tokens,
+            stream_handler=stream_handler,
+        )
+        logger.info(
+            "llm.chat.success provider=ollama latency_ms=%.0f",
+            (time.perf_counter() - start_time) * 1000,
+        )
+        return result
 
-        last_error: Optional[Exception] = None
-        for base_url in base_urls:
-            if not base_url:
-                continue
-            chat_url = f"{base_url}/api/chat"
-            try:
-                resp = client.post(chat_url, json=payload, timeout=timeout)
-                resp.raise_for_status()
-                data = resp.json()
-                content: Optional[str] = None
-                if isinstance(data.get("message"), dict):
-                    content = data["message"].get("content")
-                if not content and isinstance(data.get("messages"), list):
-                    parts = [m.get("content", "") for m in data["messages"] if m.get("role") == "assistant"]
-                    content = "".join(parts).strip() if parts else None
-                if not content and "response" in data:
-                    content = str(data.get("response"))
-                if not content:
-                    raise RuntimeError("Empty response from Ollama")
-                return content.strip()
-            except requests.HTTPError as e:
-                last_error = e
-                status = e.response.status_code if e.response else None
-                logger.error("Ollama request failed via %s: %s", base_url, e)
-                if status == 404:
-                    try:
-                        content = _ollama_generate_fallback(client, base_url, model_name, messages, temperature, timeout)
-                        if content:
-                            return content.strip()
-                    except Exception as inner:
-                        last_error = inner
-                        logger.error("Ollama generate fallback failed via %s: %s", base_url, inner)
-                continue
-            except requests.RequestException as e:
-                last_error = e
-                logger.error("Ollama request failed via %s: %s", base_url, e)
-                continue
-        if last_error:
-            raise last_error
-        raise RuntimeError("No valid Ollama base URL configured")
+    if mode == "deepseek":
+        try:
+            result = _deepseek_chat_request(
+                client,
+                model_info,
+                messages,
+                temperature,
+                max_tokens,
+                stream_handler=stream_handler,
+            )
+            logger.info(
+                "llm.chat.success provider=deepseek latency_ms=%.0f",
+                (time.perf_counter() - start_time) * 1000,
+            )
+            return result
+        except Exception as exc:
+            logger.exception("llm.chat.deepseek_failed error=%s", exc)
+            fallback_config = model_info.get("fallback") if isinstance(model_info, dict) else None
+            if fallback_config:
+                try:
+                    fallback_session = requests.Session()
+                    logger.info("llm.chat.fallback_to_ollama")
+                    result = _ollama_chat_request(
+                        fallback_session,
+                        fallback_config,
+                        messages,
+                        temperature,
+                        max_tokens,
+                        stream_handler=stream_handler,
+                    )
+                    logger.info(
+                        "llm.chat.success provider=ollama_fallback latency_ms=%.0f",
+                        (time.perf_counter() - start_time) * 1000,
+                    )
+                    return result
+                except Exception as fallback_exc:
+                    logger.exception("llm.chat.fallback_failed error=%s", fallback_exc)
+                    raise fallback_exc from exc
+            raise
 
     try:
         resp = client.chat.completions.create(
@@ -1568,11 +2004,20 @@ def _llm_chat(messages: list[dict[str, str]], temperature: float = LLM_TEMPERATU
             messages=messages,
         )
     except OpenAIError as e:
-        logger.error("LLM request failed: %s", e)
+        logger.exception("llm.chat.openai_failed error=%s", e)
         raise
     content = resp.choices[0].message.content if resp.choices else None
     if not content:
         raise RuntimeError("Empty response from LLM")
+    if mode == "azure":
+        record_llm_provider("azure-openai")
+    elif mode == "openai":
+        record_llm_provider("openai")
+    logger.info(
+        "llm.chat.success provider=%s latency_ms=%.0f",
+        mode,
+        (time.perf_counter() - start_time) * 1000,
+    )
     return content.strip()
 
 
@@ -1772,7 +2217,7 @@ def _flatten_messages_for_prompt(messages: list[dict[str, str]]) -> str:
     return "\n".join(parts)
 
 
-def _ollama_generate_fallback(client, base_url: str, model_name: str, messages: list[dict[str, str]], temperature: float, timeout: int) -> str:
+def _ollama_generate_fallback(session: requests.Session, base_url: str, model_name: str, messages: list[dict[str, str]], temperature: float, timeout: int) -> str:
     prompt = _flatten_messages_for_prompt(messages)
     payload = {
         "model": model_name,
@@ -1782,7 +2227,7 @@ def _ollama_generate_fallback(client, base_url: str, model_name: str, messages: 
             "temperature": temperature,
         },
     }
-    resp = client.post(f"{base_url}/api/generate", json=payload, timeout=timeout)
+    resp = session.post(f"{base_url}/api/generate", json=payload, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
     if isinstance(data, dict):

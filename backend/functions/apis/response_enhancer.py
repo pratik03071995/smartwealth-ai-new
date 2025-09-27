@@ -1,16 +1,20 @@
-"""Response enhancement using Ollama for natural language generation."""
+"""Response enhancement using the configured LLM for natural language."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 from .chat import _llm_chat
 
 logger = logging.getLogger("smartwealth.response_enhancer")
 
-def enhance_database_response_with_ollama(response: str, user_prompt: str) -> str:
+def enhance_database_response_with_ollama(
+    response: str,
+    user_prompt: str,
+    stream_handler: Optional[Callable[[str], None]] = None,
+) -> str:
     """
-    Enhance database response using Ollama for more natural language.
+    Enhance database responses using the configured LLM for natural language output.
     
     Args:
         response: Original database response
@@ -35,17 +39,21 @@ def enhance_database_response_with_ollama(response: str, user_prompt: str) -> st
             {"role": "user", "content": enhancement_prompt}
         ]
         
-        enhanced_response = _llm_chat(messages)
-        logger.info("Enhanced database response with Ollama")
+        enhanced_response = _llm_chat(messages, stream_handler=stream_handler)
+        logger.info("Enhanced database response with LLM")
         return enhanced_response
         
     except Exception as exc:
         logger.error(f"Failed to enhance database response: {exc}")
         return response
 
-def enhance_financial_response_with_ollama(stock_data: Dict[str, Any], user_prompt: str) -> str:
+def enhance_financial_response_with_ollama(
+    stock_data: Dict[str, Any],
+    user_prompt: str,
+    stream_handler: Optional[Callable[[str], None]] = None,
+) -> str:
     """
-    Enhance financial API response using Ollama for better formatting.
+    Enhance financial API responses using the configured LLM for better formatting.
     
     Args:
         stock_data: Stock data from financial API
@@ -79,8 +87,8 @@ def enhance_financial_response_with_ollama(stock_data: Dict[str, Any], user_prom
             {"role": "user", "content": enhancement_prompt}
         ]
         
-        enhanced_response = _llm_chat(messages)
-        logger.info("Enhanced financial response with Ollama")
+        enhanced_response = _llm_chat(messages, stream_handler=stream_handler)
+        logger.info("Enhanced financial response with LLM")
         return enhanced_response
         
     except Exception as exc:
@@ -88,9 +96,13 @@ def enhance_financial_response_with_ollama(stock_data: Dict[str, Any], user_prom
         # Fallback to basic formatting
         return f"{stock_data.get('symbol', 'Stock')} is trading at ${stock_data.get('price', 'N/A')}"
 
-def enhance_web_search_response_with_ollama(search_results: List[Dict[str, Any]], user_prompt: str) -> str:
+def enhance_web_search_response_with_ollama(
+    search_results: List[Dict[str, Any]],
+    user_prompt: str,
+    stream_handler: Optional[Callable[[str], None]] = None,
+) -> str:
     """
-    Enhance web search results using Ollama for better summarization.
+    Enhance web search results using the configured LLM for better summarization.
     
     Args:
         search_results: Web search results
@@ -122,8 +134,8 @@ def enhance_web_search_response_with_ollama(search_results: List[Dict[str, Any]]
             {"role": "user", "content": enhancement_prompt}
         ]
         
-        enhanced_response = _llm_chat(messages)
-        logger.info("Enhanced web search response with Ollama")
+        enhanced_response = _llm_chat(messages, stream_handler=stream_handler)
+        logger.info("Enhanced web search response with LLM")
         return enhanced_response
         
     except Exception as exc:
@@ -133,9 +145,14 @@ def enhance_web_search_response_with_ollama(search_results: List[Dict[str, Any]]
             return f"Based on the search results: {search_results[0].get('snippet', 'No information found')}"
         return "I couldn't find relevant information for your query."
 
-def create_conversational_response(data: Any, user_prompt: str, response_type: str = "general") -> str:
+def create_conversational_response(
+    data: Any,
+    user_prompt: str,
+    response_type: str = "general",
+    stream_handler: Optional[Callable[[str], None]] = None,
+) -> str:
     """
-    Create conversational responses using Ollama based on data type.
+    Create conversational responses using the configured LLM based on data type.
     
     Args:
         data: Response data
@@ -147,11 +164,17 @@ def create_conversational_response(data: Any, user_prompt: str, response_type: s
     """
     try:
         if response_type == "stock_price":
-            return enhance_financial_response_with_ollama(data, user_prompt)
+            return enhance_financial_response_with_ollama(
+                data, user_prompt, stream_handler=stream_handler
+            )
         elif response_type == "database":
-            return enhance_database_response_with_ollama(data, user_prompt)
+            return enhance_database_response_with_ollama(
+                data, user_prompt, stream_handler=stream_handler
+            )
         elif response_type == "web_search":
-            return enhance_web_search_response_with_ollama(data, user_prompt)
+            return enhance_web_search_response_with_ollama(
+                data, user_prompt, stream_handler=stream_handler
+            )
         else:
             # Generic enhancement
             enhancement_prompt = f"""
@@ -168,7 +191,7 @@ def create_conversational_response(data: Any, user_prompt: str, response_type: s
                 {"role": "user", "content": enhancement_prompt}
             ]
             
-            return _llm_chat(messages)
+            return _llm_chat(messages, stream_handler=stream_handler)
             
     except Exception as exc:
         logger.error(f"Failed to create conversational response: {exc}")

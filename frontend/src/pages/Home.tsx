@@ -25,7 +25,7 @@ export default function Home() {
 function PoweredByAIBadge() {
   return (
     <span
-      className="relative inline-flex items-center rounded-full px-3 py-1 text-[13px] md:text-[14px] leading-none select-none"
+      className="relative inline-flex items-center rounded-full px-2 py-[5px] text-[11px] md:text-[12px] leading-none select-none"
       style={{
         background: '#0A1630',
         border: '1px solid rgba(255,255,255,0.12)',
@@ -34,7 +34,7 @@ function PoweredByAIBadge() {
       }}
       title="Powered by AI"
     >
-      <span className="mr-1 opacity-80">powered by</span>
+      <span className="mr-1 font-medium uppercase tracking-[0.16em] text-white/90">powered by</span>
       <span
         className="font-semibold tracking-wide bg-clip-text text-transparent"
         style={{
