@@ -177,6 +177,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   const {
     messages,
     isLoading,
+    isStreaming,
     pendingLatencyMs,
     systemStatus,
     healthSnapshot,
@@ -193,6 +194,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   const [feedbackLoading, setFeedbackLoading] = useState<Record<string, boolean>>({})
   const endRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const [glowPulse, setGlowPulse] = useState(false)
 
   const outerClasses = useMemo(
     () =>
@@ -210,8 +212,8 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   const cardClasses = useMemo(
     () =>
       variant === 'embedded'
-        ? 'rounded-[20px] border border-[var(--border)] bg-[var(--panel)]/96 p-3 shadow-[0_30px_60px_rgba(17,21,41,0.24)] backdrop-blur'
-        : 'rounded-[22px] border border-[var(--border)] bg-[var(--panel)]/95 p-4 shadow-[0_24px_60px_rgba(19,24,52,0.16)] backdrop-blur',
+        ? 'relative overflow-hidden rounded-[20px] border border-[var(--border)] bg-[var(--panel)]/96 p-3 shadow-[0_30px_60px_rgba(17,21,41,0.24)] backdrop-blur'
+        : 'relative overflow-hidden rounded-[22px] border border-[var(--border)] bg-[var(--panel)]/95 p-4 shadow-[0_24px_60px_rgba(19,24,52,0.16)] backdrop-blur',
     [variant],
   )
 
@@ -259,6 +261,18 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   const statusButtonDisabled = isHealthRefreshing || systemStatus === 'checking'
   const sendDisabled =
     isLoading || systemStatus === 'unavailable' || systemStatus === 'checking' || isHealthRefreshing
+
+  const providerBadges = useMemo(() => {
+    if (!healthSnapshot?.checks) return []
+    const entries = [
+      { key: 'primary_llm', label: 'DeepSeek' },
+      { key: 'fallback_llm', label: 'Ollama' },
+      { key: 'search_backend', label: 'Search' },
+    ] as const
+    return entries
+      .map((entry) => ({ ...entry, check: healthSnapshot.checks?.[entry.key] }))
+      .filter((entry) => entry.check)
+  }, [healthSnapshot])
   const chartHighlights = useMemo(() => {
     if (!chartSpec) return null
     if (chartSpec.type === 'bar') {
@@ -296,6 +310,17 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  useEffect(() => {
+    if (!messages.length) return
+    const last = messages[messages.length - 1]
+    if (isAssistant(last)) {
+      setGlowPulse(true)
+      const timer = window.setTimeout(() => setGlowPulse(false), 900)
+      return () => window.clearTimeout(timer)
+    }
+    return undefined
   }, [messages])
 
   const renderTable = (table: TablePayload | undefined) => {
@@ -421,7 +446,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     return (
       <div className="mt-3 flex items-center gap-2 text-[7px] uppercase tracking-[0.32em] text-[var(--muted)]">
         <div className="flex items-center gap-1">
-          <button
+          <motion.button
             type="button"
             disabled={busy || selected === 'up'}
             onClick={() => submitFeedback(msg, 'up')}
@@ -431,10 +456,12 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                 : 'border-[var(--border)]/60 bg-[var(--panel)] text-[var(--text)] hover:border-[var(--brand2)]/70 hover:text-[var(--brand2)]'
             } ${busy ? 'opacity-30 pointer-events-none' : ''}`}
             aria-label="Mark answer helpful"
+            whileHover={{ scale: busy || selected === 'up' ? 1 : 1.08 }}
+            whileTap={{ scale: busy || selected === 'up' ? 1 : 0.92 }}
           >
             <span className="text-[11px] leading-none">👍</span>
-          </button>
-          <button
+          </motion.button>
+          <motion.button
             type="button"
             disabled={busy || selected === 'down'}
             onClick={() => submitFeedback(msg, 'down')}
@@ -444,9 +471,11 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                 : 'border-[var(--border)]/60 bg-[var(--panel)] text-[var(--text)] hover:border-rose-300/70 hover:text-rose-300'
             } ${busy ? 'opacity-30 pointer-events-none' : ''}`}
             aria-label="Mark answer unhelpful"
+            whileHover={{ scale: busy || selected === 'down' ? 1 : 1.08 }}
+            whileTap={{ scale: busy || selected === 'down' ? 1 : 0.92 }}
           >
             <span className="text-[11px] leading-none">👎</span>
-          </button>
+          </motion.button>
         </div>
         {latencyLabel ? (
           <span className="ml-auto inline-flex items-center gap-[6px] rounded-full border border-[var(--border)]/60 bg-[var(--panel)] px-2 py-[2px] text-[7px] uppercase tracking-[0.32em] text-[var(--muted)]">
@@ -504,6 +533,11 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   return (
     <div className={outerClasses}>
       <div className={cardClasses}>
+        <div
+          className={`pointer-events-none absolute inset-0 rounded-[inherit] bg-[radial-gradient(circle_at_top,rgba(123,91,251,0.16),rgba(123,91,251,0))] transition-opacity duration-500 ${
+            glowPulse ? 'opacity-100 animate-[glowPulse_1.4s_ease-in-out]' : 'opacity-0'
+          }`}
+        />
         <div className="sticky top-0 z-20 bg-[var(--panel)]/92 px-4 pt-2 backdrop-blur">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -512,18 +546,60 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
               </span>
             </div>
             <div className="flex items-center gap-2 text-[10px] font-medium text-[var(--muted)]">
-              <button
-                type="button"
-                onClick={() => refreshHealth({ force: true })}
-                disabled={statusButtonDisabled}
-                title={statusTitle}
-                className={`inline-flex items-center gap-2 rounded-full border px-3 py-[6px] font-semibold transition ${
-                  statusInfo.container
-                } ${statusInfo.textClass} ${statusButtonDisabled ? 'cursor-not-allowed opacity-70' : 'hover:opacity-90'}`}
-              >
-                <span className={dotClassName} />
-                <span>{statusInfo.label}</span>
-              </button>
+              <div className="relative group/status">
+                <button
+                  type="button"
+                  onClick={() => refreshHealth({ force: true })}
+                  disabled={statusButtonDisabled}
+                  title={statusTitle}
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-[6px] font-semibold transition ${
+                    statusInfo.container
+                  } ${statusInfo.textClass} ${statusButtonDisabled ? 'cursor-not-allowed opacity-70' : 'hover:opacity-90'}`}
+                >
+                  <span className={dotClassName} />
+                  <span>{statusInfo.label}</span>
+                </button>
+                {providerBadges.length ? (
+                <div className="pointer-events-none absolute right-0 mt-2 hidden min-w-[200px] flex-col gap-2 rounded-2xl border border-white/60 bg-white/95 p-3 text-[9px] shadow-[0_18px_38px_rgba(17,23,41,0.18)] backdrop-blur transition group-hover/status:flex group-focus-within/status:flex">
+                  {providerBadges.map(({ key, label, check }) => {
+                    const status = String(check?.status || 'skipped').toLowerCase() as 'ready' | 'degraded' | 'unavailable' | 'skipped'
+                    const badgeStyles: Record<typeof status, string> = {
+                      ready: 'border-emerald-200/70 bg-emerald-50/95 text-emerald-600',
+                      degraded: 'border-amber-200/70 bg-amber-50/95 text-amber-600',
+                      unavailable: 'border-rose-200/80 bg-rose-50/95 text-rose-600',
+                      skipped: 'border-[var(--border)]/60 bg-[var(--panel)]/95 text-[var(--muted)]',
+                    }
+                    const dotStyles: Record<typeof status, string> = {
+                      ready: 'bg-emerald-400',
+                      degraded: 'bg-amber-400',
+                      unavailable: 'bg-rose-500',
+                        skipped: 'bg-[var(--muted)]',
+                      }
+                      const checkedAt = check?.checkedAt
+                        ? new Date(check.checkedAt).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : null
+                      return (
+                        <div
+                          key={key}
+                          className={`pointer-events-none rounded-xl border px-3 py-2 shadow-[0_10px_18px_rgba(17,23,41,0.12)] ${badgeStyles[status]}`}
+                        >
+                          <div className="flex items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.28em]">
+                            <span className={`h-1.5 w-1.5 rounded-full ${dotStyles[status]}`} />
+                            {label}
+                          </div>
+                          <div className="mt-1 text-[8px] normal-case tracking-normal text-[var(--muted)]/85">
+                            {check?.summary || 'No recent update'}
+                            {checkedAt ? <span className="ml-1 text-[var(--muted)]/70">• {checkedAt}</span> : null}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </div>
               {isLoading ? (
                 <motion.span
                   initial={{ opacity: 0, y: -2 }}
@@ -667,6 +743,20 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
             {isLoading ? 'Thinking…' : 'Send'}
           </motion.button>
         </div>
+        {isStreaming ? (
+          <div className="mt-2 flex items-center gap-2 text-[10px] text-[var(--muted)]">
+            <div className="flex items-end gap-[4px]">
+              {[0, 1, 2, 3].map((bar) => (
+                <span
+                  key={bar}
+                  className="waveform-bar h-3 w-1.5 rounded-full bg-[var(--brand2)]/70"
+                  style={{ animationDelay: `${bar * 0.12}s` }}
+                />
+              ))}
+            </div>
+            <span>Generating response…</span>
+          </div>
+        ) : null}
       </div>
 
       {/* Chart Modal */}

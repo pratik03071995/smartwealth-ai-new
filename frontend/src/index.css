@@ -159,6 +159,22 @@
     0 1px 0 rgba(0,0,0,0.06);
 }
 
+@keyframes glowPulse {
+  0% { opacity: 0; transform: scale(0.98); }
+  50% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.98); }
+}
+
+@keyframes waveformBounce {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.55; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+.waveform-bar {
+  transform-origin: center bottom;
+  animation: waveformBounce 1.15s ease-in-out infinite;
+}
+
 @keyframes aiGradient {
   0%   { background-position: 0% 50%; }
   50%  { background-position: 100% 50%; }

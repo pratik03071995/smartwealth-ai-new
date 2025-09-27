@@ -90,6 +90,7 @@ type RefreshOptions = { force?: boolean; silent?: boolean }
 type ChatSessionValue = {
   messages: Msg[]
   isLoading: boolean
+  isStreaming: boolean
   pendingLatencyMs: number
   systemStatus: SystemStatus
   healthSnapshot: HealthSnapshot | null
@@ -113,6 +114,7 @@ export function useChatSession() {
 export function ChatSessionProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Msg[]>([INITIAL_ASSISTANT])
   const [isLoading, setIsLoading] = useState(false)
+  const [isStreaming, setIsStreaming] = useState(false)
   const [pendingLatencyMs, setPendingLatencyMs] = useState(0)
   const [systemStatus, setSystemStatus] = useState<SystemStatus>('checking')
   const [healthSnapshot, setHealthSnapshot] = useState<HealthSnapshot | null>(null)
@@ -236,6 +238,7 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
         }
 
         setIsLoading(true)
+        setIsStreaming(true)
         assistantId = createMessageId()
         const placeholder: AssistantMsg = {
           role: 'assistant',
@@ -384,6 +387,7 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
         )
       } finally {
         setIsLoading(false)
+        setIsStreaming(false)
         sendGuardRef.current = false
       }
     },
@@ -428,6 +432,7 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
     () => ({
       messages,
       isLoading,
+      isStreaming,
       pendingLatencyMs,
       systemStatus,
       healthSnapshot,
@@ -440,6 +445,7 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
     [
       messages,
       isLoading,
+      isStreaming,
       pendingLatencyMs,
       systemStatus,
       healthSnapshot,
