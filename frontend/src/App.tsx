@@ -7,7 +7,7 @@ function useThemeBoot() {
   const getInitial = () => {
     const saved = localStorage.getItem('theme')
     if (saved === 'light' || saved === 'dark') return saved as 'light' | 'dark'
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    return 'light'
   }
   const [theme] = React.useState<'light' | 'dark'>(getInitial)
   useEffect(() => {
@@ -57,15 +57,9 @@ export default function App() {
       {/* Keep your header exactly as-is (blur stays) */}
       <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-[color:var(--bg)]/80 backdrop-blur">
         <div className="mx-auto grid max-w-6xl grid-cols-[1fr_auto_1fr] items-center gap-4 px-6 py-4">
-          {/* Brand: SmartWealth gradient + AI white */}
-          <Link to="/" className="flex items-center gap-2 font-bold tracking-tight select-none">
-            <span
-              className="text-xl bg-clip-text text-transparent"
-              style={{ backgroundImage: 'linear-gradient(90deg, var(--brand2), var(--brand1))' }}
-            >
-              SmartWealth
-            </span>
-            <span className="text-xl text-white">AI</span>
+          {/* Brand: SmartWealth mark with luminous AI capsule */}
+          <Link to="/" className="select-none">
+            <BrandMark />
           </Link>
 
           <ProTabs activePath={location.pathname} />
@@ -82,7 +76,7 @@ export default function App() {
           <div className="opacity-80">
             <div className="text-sm">©2025 SmartWealth AI • AI-assisted research platform</div>
           </div>
-          <div className="opacity-80 text-sm"></div>
+          <FooterGlyphRow />
           <FooterThemeToggle />
         </div>
       </footer>
@@ -136,6 +130,80 @@ function DropdownPortal({
       {children}
     </div>,
     document.body
+  )
+}
+
+/* ================= Brand Mark ================= */
+const IconTrend = (
+  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.6">
+    <path d="M4 18l5-5 3 3 8-8" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M15 8h5v5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+const IconPiggy = (
+  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M5 11c0-3.866 3.582-7 8-7 3.314 0 6.125 2.01 7.36 4.582.42.86 1.3 1.396 2.248 1.396H22v2h-1.4c-.58 0-1.074.328-1.264.822A7 7 0 0 1 12 20c-4.418 0-8-3.134-8-7Z" />
+    <path d="M6 13H4a1 1 0 0 0-1 1v1.5a1.5 1.5 0 0 0 1.5 1.5H6" strokeLinecap="round" />
+    <path d="M14 5V3" strokeLinecap="round" />
+    <circle cx="15" cy="11" r="1.2" fill="currentColor" />
+  </svg>
+)
+
+const IconPie = (
+  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.6">
+    <path d="M12 3v9l6.3 3.64A8 8 0 1 1 12 3Z" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M13 2.05A8 8 0 0 1 21.95 11H13Z" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+const IconSpark = (
+  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M12 3v4" strokeLinecap="round" />
+    <path d="M12 17v4" strokeLinecap="round" />
+    <path d="M5.64 5.64l2.83 2.83" strokeLinecap="round" />
+    <path d="M15.53 15.53l2.83 2.83" strokeLinecap="round" />
+    <path d="M3 12h4" strokeLinecap="round" />
+    <path d="M17 12h4" strokeLinecap="round" />
+    <circle cx="12" cy="12" r="3.5" />
+  </svg>
+)
+
+const FOOTER_GLYPHS = [
+  { icon: IconTrend },
+  { icon: IconPiggy },
+  { icon: IconPie },
+  { icon: IconSpark },
+]
+
+function BrandMark() {
+  return (
+    <span className="group relative inline-flex items-baseline gap-1 text-[26px] leading-none">
+      <span
+        className="font-black tracking-tight text-transparent drop-shadow-sm transition-transform duration-200 group-hover:-translate-y-[1px]"
+        style={{ backgroundImage: 'linear-gradient(95deg, #8b5bff 0%, #b18cff 55%, #7b5bfb 100%)', WebkitBackgroundClip: 'text' }}
+      >
+        SmartWealth
+      </span>
+      <sup className="relative -top-2 text-[11px] font-semibold text-slate-800 tracking-[0.28em] opacity-90 dark:text-white/80">
+        AI
+      </sup>
+    </span>
+  )
+}
+
+function FooterGlyphRow() {
+  return (
+    <div className="flex items-center justify-center gap-4 text-[var(--muted)]">
+      {FOOTER_GLYPHS.map((glyph, idx) => (
+        <span
+          key={idx}
+          className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--border)]/35 bg-white/90 text-[var(--brand1)] shadow-[0_12px_26px_rgba(15,23,42,0.12)] dark:bg-white/10"
+        >
+          {glyph.icon}
+        </span>
+      ))}
+    </div>
   )
 }
 
