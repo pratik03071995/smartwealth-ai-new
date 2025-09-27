@@ -27,6 +27,7 @@ import {
   isAssistant,
   submitFeedbackAPI,
 } from './chat/ChatSessionProvider'
+import { useChatChime } from '../hooks/useChatChime'
 
 const compactCurrency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -195,6 +196,8 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   const endRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [glowPulse, setGlowPulse] = useState(false)
+  const prevStreamingRef = useRef(isStreaming)
+  const { play: playChime, muted: chimeMuted, toggleMute: toggleChimeMute } = useChatChime()
 
   const outerClasses = useMemo(
     () =>
@@ -322,6 +325,16 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     }
     return undefined
   }, [messages])
+
+  useEffect(() => {
+    if (prevStreamingRef.current && !isStreaming) {
+      const last = messages[messages.length - 1]
+      if (last && isAssistant(last)) {
+        playChime()
+      }
+    }
+    prevStreamingRef.current = isStreaming
+  }, [isStreaming, messages, playChime])
 
   const renderTable = (table: TablePayload | undefined) => {
     if (!table || !table.rows?.length) return null
@@ -551,7 +564,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                   type="button"
                   onClick={() => refreshHealth({ force: true })}
                   disabled={statusButtonDisabled}
-                  title={statusTitle}
+                  aria-label={statusTitle || 'Refresh system status'}
                   className={`inline-flex items-center gap-2 rounded-full border px-3 py-[6px] font-semibold transition ${
                     statusInfo.container
                   } ${statusInfo.textClass} ${statusButtonDisabled ? 'cursor-not-allowed opacity-70' : 'hover:opacity-90'}`}
@@ -600,6 +613,28 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                   </div>
                 ) : null}
               </div>
+              <button
+                type="button"
+                onClick={toggleChimeMute}
+                className={`hidden h-8 w-8 items-center justify-center rounded-full border text-[var(--muted)] transition md:inline-flex ${
+                  chimeMuted
+                    ? 'border-[var(--border)]/70 bg-[var(--panel)]/80'
+                    : 'border-transparent bg-white/90 text-[var(--brand2)] shadow-[0_8px_18px_rgba(123,91,251,0.18)]'
+                }`}
+                aria-label={chimeMuted ? 'Unmute response chime' : 'Mute response chime'}
+              >
+                {chimeMuted ? (
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+                    <path d="M4 9v6h3l5 4V5L7 9H4Z" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="m16 9 4 6M20 9l-4 6" strokeLinecap="round" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+                    <path d="M4 9v6h3l5 4V5L7 9H4Z" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M17 9.34a4 4 0 0 1 0 5.32M19.54 6.46a7.5 7.5 0 0 1 0 11.08" strokeLinecap="round" />
+                  </svg>
+                )}
+              </button>
               {isLoading ? (
                 <motion.span
                   initial={{ opacity: 0, y: -2 }}
