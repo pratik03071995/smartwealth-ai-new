@@ -379,7 +379,7 @@ export default function Chat() {
   }
 
   function renderFeedbackControls(msg: AssistantMsg) {
-    if (!msg.id) return null
+    if (!msg.id || !msg.text || isLoading) return null
     const busy = !!feedbackLoading[msg.id]
     const selected = msg.feedback ?? null
     const latencyLabel =
@@ -387,39 +387,34 @@ export default function Chat() {
         ? `Answered in ${formatLatency(msg.latencyMs)}`
         : null
     return (
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[9px] uppercase tracking-wider text-[var(--muted)]">
-        <div className="flex items-center gap-1 sm:gap-2">
-          <span className="opacity-80">Helpful?</span>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[7px] uppercase tracking-[0.28em] text-[var(--muted)]">
+        <div className="flex items-center gap-1">
+          <span className="opacity-60">Helpful?</span>
           <button
             type="button"
             disabled={busy || selected === 'up'}
             onClick={() => submitFeedback(msg, 'up')}
-            className={`group rounded-full border border-[var(--border)] bg-[var(--panel)]/80 px-2 py-[5px] transition hover:bg-[var(--panel)] ${
-              selected === 'up' ? 'shadow-[0_0_12px_rgba(91,136,251,0.35)] text-[var(--brand2)]' : 'text-[var(--text)]'
-            } ${busy ? 'opacity-50' : ''}`}
+            className={`inline-flex items-center gap-[4px] rounded-full border border-[var(--border)]/60 bg-gradient-to-r from-[var(--panel)] to-[var(--panel)]/40 px-2 py-[3px] text-[9px] font-semibold tracking-[0.3em] transition-all hover:border-[var(--brand2)]/80 hover:shadow-[0_0_10px_rgba(123,91,251,0.4)] ${
+              selected === 'up' ? 'border-[var(--brand2)] text-[var(--brand2)] shadow-[0_0_14px_rgba(123,91,251,0.45)]' : 'text-[var(--text)]'
+            } ${busy ? 'opacity-35' : ''}`}
           >
-            <span className="inline-flex items-center gap-1">
-              <span className="text-base leading-none">👍</span>
-              <span className="hidden sm:inline">Yes</span>
-            </span>
+            <span className="text-[11px] leading-none">👍</span>
+            <span className="tracking-[0.35em]">Yes</span>
           </button>
           <button
             type="button"
             disabled={busy || selected === 'down'}
             onClick={() => submitFeedback(msg, 'down')}
-            className={`group rounded-full border border-[var(--border)] bg-[var(--panel)]/80 px-2 py-[5px] transition hover:bg-[var(--panel)] ${
-              selected === 'down' ? 'shadow-[0_0_12px_rgba(239,68,68,0.35)] text-red-400' : 'text-[var(--text)]'
-            } ${busy ? 'opacity-50' : ''}`}
+            className={`inline-flex items-center gap-[4px] rounded-full border border-[var(--border)]/60 bg-gradient-to-r from-[var(--panel)] to-[var(--panel)]/40 px-2 py-[3px] text-[9px] font-semibold tracking-[0.3em] transition-all hover:border-rose-400/70 hover:shadow-[0_0_10px_rgba(244,63,94,0.35)] ${
+              selected === 'down' ? 'border-rose-400 text-rose-400 shadow-[0_0_14px_rgba(244,63,94,0.45)]' : 'text-[var(--text)]'
+            } ${busy ? 'opacity-35' : ''}`}
           >
-            <span className="inline-flex items-center gap-1">
-              <span className="text-base leading-none">👎</span>
-              <span className="hidden sm:inline">No</span>
-            </span>
+            <span className="text-[11px] leading-none">👎</span>
+            <span className="tracking-[0.35em]">No</span>
           </button>
-          {selected ? <span className="text-[var(--brand2)]">Appreciated!</span> : null}
         </div>
         {latencyLabel ? (
-          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--panel)]/60 px-2.5 py-[4px] text-[8px] uppercase tracking-[0.18em] text-[var(--muted)]">
+          <span className="ml-auto inline-flex items-center gap-[6px] rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/50 px-2 py-[2px] text-[7px] font-semibold tracking-[0.32em] text-[var(--muted)]">
             <span className="h-1 w-1 rounded-full bg-[var(--brand2)]/70" />
             {latencyLabel}
           </span>
@@ -469,53 +464,155 @@ export default function Chat() {
 
     setInput('')
     setIsLoading(true)
-    setMessages((m) => [...m, { role: 'user', text }])
+
+    const assistantId = createMessageId()
     lastPromptRef.current = text
+    const placeholder: AssistantMsg = {
+      role: 'assistant',
+      text: '',
+      id: assistantId,
+      feedback: null,
+      plan: null,
+      followups: null,
+      table: undefined,
+      chart: null,
+      tablePreview: null,
+      sql: null,
+      latencyMs: undefined,
+      prompt: lastPromptRef.current,
+      sourceLabel: null,
+      dataSource: null,
+      llmSource: null,
+      llmSourceRaw: null,
+      searchProvider: null,
+    }
+
+    setMessages((m) => [...m, { role: 'user', text }, placeholder])
+
     const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
 
     try {
-      const { data } = await axios.post(`${API_BASE}/chat`, { message: text })
-      const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
-      const latencyMs = Math.max(0, endedAt - startedAt)
-      const assistantId = (data?.messageId as string) || createMessageId()
-      const sourceLabel = (data?.sourceLabel as string | undefined) ?? null
-      const dataSource = (data?.data_source as string | undefined) ?? null
-      const llmSource = (data?.llmSource as string | undefined) ?? null
-      const llmSourceRaw = (data?.llmSourceRaw as string | undefined) ?? null
-      const searchProvider = (data?.search_provider as string | undefined) ?? null
-      const assistant: AssistantMsg = {
-        role: 'assistant',
-        text: data?.reply || 'I could not craft a response for that.',
-        table: data?.table,
-        chart: data?.chart,
-        sql: data?.sql,
-        latencyMs,
-        id: assistantId,
-        prompt: lastPromptRef.current,
-        feedback: null,
-        plan: data?.plan ?? null,
-        followups: (data?.followups as string[] | undefined) ?? null,
-        tablePreview: (data?.tablePreview as Record<string, unknown>[] | undefined) ?? null,
-        sourceLabel,
-        dataSource,
-        llmSource,
-        llmSourceRaw,
-        searchProvider,
+      const response = await fetch(`${API_BASE}/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({ message: text }),
+      })
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Streaming request failed (${response.status})`)
       }
-      setMessages((m) => [...m, assistant])
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let streamingText = ''
+      let finished = false
+      let currentAssistantId = assistantId
+      const appendDelta = (delta: string) => {
+        streamingText += delta
+        setMessages((prev) =>
+          prev.map((entry) =>
+            isAssistant(entry) && entry.id === currentAssistantId
+              ? { ...entry, text: streamingText }
+              : entry,
+          ),
+        )
+      }
+
+      while (!finished) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary !== -1) {
+          const rawEvent = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          boundary = buffer.indexOf('\n\n')
+
+          const lines = rawEvent.split('\n')
+          const dataLine = lines.find((line) => line.startsWith('data:'))
+          if (!dataLine) continue
+          const jsonPayload = dataLine.slice(5).trim()
+          if (!jsonPayload) continue
+
+          let payload: any
+          try {
+            payload = JSON.parse(jsonPayload)
+          } catch (parseErr) {
+            console.warn('Failed to parse SSE payload', parseErr)
+            continue
+          }
+
+          if (payload.type === 'delta' && typeof payload.delta === 'string') {
+            appendDelta(payload.delta)
+          } else if (payload.type === 'result') {
+            const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+            const latencyMs = Math.max(0, endedAt - startedAt)
+            const data = payload.data ?? {}
+            currentAssistantId = (data.messageId as string) || currentAssistantId
+            const sourceLabel = (data.sourceLabel as string | undefined) ?? null
+            const dataSource = (data.data_source as string | undefined) ?? null
+            const llmSource = (data.llmSource as string | undefined) ?? null
+            const llmSourceRaw = (data.llmSourceRaw as string | undefined) ?? null
+            const searchProvider = (data.search_provider as string | undefined) ?? null
+            const finalText =
+              typeof data.reply === 'string' && data.reply.length
+                ? data.reply
+                : streamingText || 'I could not craft a response for that.'
+
+            setMessages((prev) =>
+              prev.map((entry) =>
+                isAssistant(entry) && entry.id === assistantId
+                  ? {
+                      ...entry,
+                      id: currentAssistantId,
+                      text: finalText,
+                      table: data.table,
+                      chart: data.chart,
+                      sql: data.sql,
+                      latencyMs,
+                      plan: data.plan ?? null,
+                      followups: (data.followups as string[] | undefined) ?? null,
+                      tablePreview: (data.tablePreview as Record<string, unknown>[] | undefined) ?? null,
+                      sourceLabel,
+                      dataSource,
+                      llmSource,
+                      llmSourceRaw,
+                      searchProvider,
+                    }
+                  : entry,
+              ),
+            )
+          } else if (payload.type === 'error') {
+            setMessages((prev) =>
+              prev.map((entry) =>
+                isAssistant(entry) && entry.id === assistantId
+                  ? {
+                      ...entry,
+                      text: payload.error || 'Error reaching API.',
+                    }
+                  : entry,
+              ),
+            )
+          } else if (payload.type === 'end') {
+            finished = true
+            break
+          }
+        }
+      }
     } catch (err) {
-      const assistantId = createMessageId()
-      const fallback: AssistantMsg = {
-        role: 'assistant',
-        text: 'Error reaching API.',
-        latencyMs: 0,
-        id: assistantId,
-        prompt: lastPromptRef.current,
-        feedback: null,
-        plan: null,
-        followups: null,
-      }
-      setMessages((m) => [...m, fallback])
+      console.error('Streaming chat failed', err)
+      setMessages((prev) =>
+        prev.map((entry) =>
+          isAssistant(entry) && entry.id === assistantId
+            ? { ...entry, text: 'Error reaching API.' }
+            : entry,
+        ),
+      )
     } finally {
       setIsLoading(false)
     }
@@ -523,35 +620,49 @@ export default function Chat() {
 
   return (
     <div className="relative z-10 mx-auto max-w-xl">
-      <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-4 backdrop-blur">
-        <div className="mb-3 flex items-center justify-between text-xs text-[var(--muted)]">
-          <span className="font-semibold tracking-wide uppercase">SmartWealth Assistant</span>
-          <div className="flex items-center gap-2">
-            {isLoading ? (
-              <motion.span
-                initial={{ opacity: 0, y: -2 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel)] px-2.5 py-[6px] text-[9px] uppercase tracking-wider text-[var(--brand2)] shadow-glow"
-              >
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inset-0 rounded-full bg-[var(--brand2)]/70 animate-ping" />
-                  <span className="relative h-2 w-2 rounded-full bg-[var(--brand2)]" />
+      <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel)] backdrop-blur">
+        <div className="sticky top-0 z-20 border-b border-[var(--border)]/70 bg-[var(--panel)]/90 px-4 py-4 backdrop-blur-xl">
+          <div className="flex items-center justify-between gap-4 text-[9px] uppercase tracking-[0.32em] text-[var(--muted)]">
+            <div className="flex flex-col">
+              <span className="text-[11px] font-extrabold tracking-[0.6em] text-[var(--text)]">
+                SmartWealth Assistant
+              </span>
+              <span className="text-[7px] font-semibold tracking-[0.48em] text-[var(--muted)]/80">
+                
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {isLoading ? (
+                <motion.span
+                  initial={{ opacity: 0, y: -2 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/70 bg-gradient-to-r from-[var(--brand2)]/18 via-[var(--panel)] to-[var(--brand1)]/12 px-3 py-[6px] text-[8px] font-semibold uppercase tracking-[0.38em] text-[var(--brand2)] shadow-[0_0_22px_rgba(123,91,251,0.25)]"
+                >
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inset-0 rounded-full bg-[var(--brand2)]/60 animate-ping" />
+                    <span className="relative h-2 w-2 rounded-full bg-[var(--brand2)]" />
+                  </span>
+                  Synthesizing • {formatLatency(pendingLatencyMs) || '…'}
+                </motion.span>
+              ) : (
+                <span className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/70 px-3 py-[6px] text-[8px] font-semibold uppercase tracking-[0.38em] text-[var(--muted)]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  Ready
                 </span>
-                Synthesizing • {formatLatency(pendingLatencyMs) || '…'}
-              </motion.span>
-            ) : null}
-            {messages.length > 1 ? (
-              <button
-                onClick={clearConversation}
-                className="rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-1 font-medium uppercase tracking-wide text-[var(--brand2)] transition hover:opacity-80"
-              >
-                Clear Chat
-              </button>
-            ) : null}
+              )}
+              {messages.length > 1 ? (
+                <button
+                  onClick={clearConversation}
+                  className="inline-flex items-center gap-1 rounded-full border border-[var(--border)]/70 bg-[var(--panel)]/70 px-3 py-[6px] text-[9px] font-semibold uppercase tracking-[0.4em] text-[var(--brand2)] transition hover:shadow-[0_0_18px_rgba(123,91,251,0.25)]"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
         {/* SCROLLABLE feed */}
-        <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-2 scroll-slim">
+        <div className="space-y-2 max-h-[28rem] overflow-y-auto px-4 pb-4 pt-3 pr-4 scroll-slim">
           {messages.map((m, i) => (
             <motion.div
               key={i}
