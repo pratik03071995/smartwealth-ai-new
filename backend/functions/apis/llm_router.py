@@ -4,11 +4,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, Tuple
 
 # Import moved to avoid circular dependency
 
 logger = logging.getLogger("smartwealth.llm_router")
+
+
+def _truncate(text: str, limit: int = 160) -> str:
+    cleaned = (text or "").replace("\n", " ").strip()
+    return cleaned if len(cleaned) <= limit else f"{cleaned[: limit - 1]}…"
 
 def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
     """
@@ -20,6 +26,10 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
     Returns:
         Tuple of (strategy, analysis)
     """
+    start_time = time.perf_counter()
+    safe_prompt = _truncate(user_prompt, 240)
+    logger.info("router.start prompt_len=%s prompt=%s", len(user_prompt or ""), safe_prompt)
+
     analysis_prompt = f"""
     Analyze this user query and determine the best search strategy:
 
@@ -62,6 +72,9 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
         # Import here to avoid circular dependency
         from .chat import _llm_chat, record_llm_provider
         llm_response = _llm_chat(messages)
+        logger.info(
+            "router.llm_response received latency_ms=%.0f", (time.perf_counter() - start_time) * 1000
+        )
         
         # Parse LLM response
         try:
@@ -71,7 +84,7 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
                 raw = re.sub(r"\s*```$", "", raw)
             analysis = json.loads(raw)
         except json.JSONDecodeError:
-            logger.warning(f"Failed to parse LLM response as JSON: {llm_response}")
+            logger.warning("router.json_parse_failed response=%s", llm_response)
             # Fallback to heuristic routing
             record_llm_provider("heuristic")
             return _fallback_heuristic_routing(user_prompt)
@@ -79,22 +92,28 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
         # Validate required fields
         required_fields = ['strategy', 'reason', 'search_type', 'intent']
         if not all(field in analysis for field in required_fields):
-            logger.warning(f"LLM response missing required fields: {analysis}")
+            logger.warning("router.validation_failed missing_fields response=%s", analysis)
             record_llm_provider("heuristic")
             return _fallback_heuristic_routing(user_prompt)
         
         # Ensure strategy is valid
         if analysis['strategy'] not in ['web_search', 'database_search']:
-            logger.warning(f"Invalid strategy from LLM: {analysis['strategy']}")
+            logger.warning("router.invalid_strategy strategy=%s response=%s", analysis.get('strategy'), analysis)
             record_llm_provider("heuristic")
             return _fallback_heuristic_routing(user_prompt)
         
-        logger.info(f"LLM routing: '{user_prompt}' -> {analysis['strategy']} ({analysis['reason']})")
-        logger.info(f"LLM analysis details: {analysis}")
+        logger.info(
+            "router.success strategy=%s reason=%s confidence=%s symbol=%s",
+            analysis['strategy'],
+            analysis.get('reason'),
+            analysis.get('confidence'),
+            analysis.get('symbol'),
+        )
+        logger.debug("router.analysis payload=%s", analysis)
         return analysis['strategy'], analysis
         
     except Exception as exc:
-        logger.error(f"LLM routing failed: {exc}")
+        logger.exception("router.failure error=%s", exc)
         from .chat import record_llm_provider
         record_llm_provider("heuristic")
         return _fallback_heuristic_routing(user_prompt)
@@ -104,6 +123,7 @@ def _fallback_heuristic_routing(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
     from .chat import record_llm_provider
 
     record_llm_provider("heuristic")
+    safe_prompt = _truncate(user_prompt, 160)
     prompt_lower = user_prompt.lower()
     
     # Stock price keywords
@@ -119,6 +139,7 @@ def _fallback_heuristic_routing(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
     ]
     
     if any(keyword in prompt_lower for keyword in stock_price_keywords):
+        logger.info("router.heuristic strategy=web_search intent=stock_price prompt=%s", safe_prompt)
         return 'web_search', {
             'strategy': 'web_search',
             'reason': 'stock_price_query',
@@ -128,6 +149,7 @@ def _fallback_heuristic_routing(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
         }
     
     if any(keyword in prompt_lower for keyword in news_keywords):
+        logger.info("router.heuristic strategy=web_search intent=news prompt=%s", safe_prompt)
         return 'web_search', {
             'strategy': 'web_search', 
             'reason': 'news_query',
@@ -137,6 +159,7 @@ def _fallback_heuristic_routing(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
         }
     
     # Default to database search
+    logger.info("router.heuristic strategy=database_search prompt=%s", safe_prompt)
     return 'database_search', {
         'strategy': 'database_search',
         'reason': 'analytical_query',
