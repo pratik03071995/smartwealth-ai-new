@@ -584,8 +584,24 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                     <span className="text-[0.62rem] tracking-[0.32em] text-[var(--muted)]">AI</span>
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/80 px-2.5 py-1 text-[0.62rem] tracking-[0.32em] text-[var(--muted)]">
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--panel)] text-[var(--muted)]">■</span>
+                  <span className="inline-flex items-center gap-2 rounded-full border border-[var(--border)]/60 bg-[var(--panel)]/90 px-2.5 py-1 text-[0.62rem] tracking-[0.32em] text-[var(--muted)] shadow-[0_8px_18px_rgba(19,23,41,0.12)]">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--panel)] text-[var(--muted)]">
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path
+                          d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4Z"
+                          stroke="currentColor"
+                          strokeWidth="1.3"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M6.5 19c0-2.49 2.69-4.5 5.5-4.5s5.5 2.01 5.5 4.5"
+                          stroke="currentColor"
+                          strokeWidth="1.3"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </span>
                     <span>You</span>
                   </span>
                 )}
