@@ -3,32 +3,44 @@ import { AnimatePresence, motion } from 'framer-motion'
 import Chat from './Chat'
 
 const BUBBLE_SIZE = 64
+const VIEWPORT_PADDING = 24
+
 export default function FloatingChat() {
   const [isOpen, setIsOpen] = useState(false)
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 0,
+    height: typeof window !== 'undefined' ? window.innerHeight : 0,
+  }))
   const [position, setPosition] = useState(() => ({
     x:
       typeof window !== 'undefined'
-        ? Math.max(window.innerWidth - (BUBBLE_SIZE + 24), 24)
-        : 24,
-    y: typeof window !== 'undefined' ? Math.max(window.innerHeight * 0.65, 120) : 240,
+        ? Math.max(window.innerWidth - (BUBBLE_SIZE + VIEWPORT_PADDING), VIEWPORT_PADDING)
+        : VIEWPORT_PADDING,
+    y:
+      typeof window !== 'undefined'
+        ? Math.max(window.innerHeight * 0.65, VIEWPORT_PADDING * 5)
+        : VIEWPORT_PADDING * 5,
   }))
   const dragOriginRef = useRef({ x: 0, y: 0 })
   const pointerOriginRef = useRef({ x: 0, y: 0 })
   const draggingRef = useRef(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const [panelMetrics, setPanelMetrics] = useState({ width: 0, height: 0 })
 
   const clampPosition = useCallback((x: number, y: number) => {
     if (typeof window === 'undefined') return { x, y }
-    const maxX = window.innerWidth - BUBBLE_SIZE - 24
-    const maxY = window.innerHeight - BUBBLE_SIZE - 24
+    const maxX = window.innerWidth - BUBBLE_SIZE - VIEWPORT_PADDING
+    const maxY = window.innerHeight - BUBBLE_SIZE - VIEWPORT_PADDING
     return {
-      x: Math.min(Math.max(24, x), Math.max(24, maxX)),
-      y: Math.min(Math.max(24, y), Math.max(24, maxY)),
+      x: Math.min(Math.max(VIEWPORT_PADDING, x), Math.max(VIEWPORT_PADDING, maxX)),
+      y: Math.min(Math.max(VIEWPORT_PADDING, y), Math.max(VIEWPORT_PADDING, maxY)),
     }
   }, [])
 
   useEffect(() => {
     const handleResize = () => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight })
       setPosition((prev) => clampPosition(prev.x, prev.y))
     }
     window.addEventListener('resize', handleResize)
@@ -86,15 +98,20 @@ export default function FloatingChat() {
   )
 
   useEffect(() => {
-    if (!isOpen) return
-    const handleClick = (event: MouseEvent) => {
-      if (!rootRef.current) return
-      if (!rootRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-      }
+    if (!isOpen || typeof ResizeObserver === 'undefined') return
+    const updateMetrics = () => {
+      if (!panelRef.current) return
+      const { offsetWidth, offsetHeight } = panelRef.current
+      setPanelMetrics((prev) =>
+        prev.width === offsetWidth && prev.height === offsetHeight
+          ? prev
+          : { width: offsetWidth, height: offsetHeight },
+      )
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
+    updateMetrics()
+    const observer = new ResizeObserver(updateMetrics)
+    if (panelRef.current) observer.observe(panelRef.current)
+    return () => observer.disconnect()
   }, [isOpen])
 
   const bubbleStyle = useMemo(
@@ -128,6 +145,21 @@ export default function FloatingChat() {
     }
   }, [panelSide])
 
+  const panelTop = useMemo(() => {
+    const viewportHeight = viewport.height || (typeof window !== 'undefined' ? window.innerHeight : 0)
+    const panelHeight = panelMetrics.height || 360
+    const bubbleTop = position.y
+    const bubbleBottom = position.y + BUBBLE_SIZE
+    const spaceBelow = viewportHeight - bubbleBottom - VIEWPORT_PADDING
+
+    let top = bubbleTop
+    if (spaceBelow < panelHeight * 0.6) {
+      top = bubbleBottom - panelHeight
+    }
+    top = Math.max(VIEWPORT_PADDING, Math.min(top, viewportHeight - panelHeight - VIEWPORT_PADDING))
+    return top
+  }, [panelMetrics.height, position.y, viewport.height])
+
   return (
     <div className="pointer-events-none fixed inset-0 z-[60]">
       <div className="pointer-events-none absolute inset-0">
@@ -144,12 +176,43 @@ export default function FloatingChat() {
             aria-label="Open SmartWealth chat assistant"
             aria-expanded={isOpen}
             aria-haspopup="dialog"
-            className="relative flex h-16 w-16 items-center justify-center rounded-full border border-[var(--border)]/60 bg-[var(--panel)] text-[var(--text)] shadow-[0_18px_42px_rgba(25,32,61,0.28)] backdrop-blur transition hover:scale-105"
+            className="group relative flex h-16 w-16 items-center justify-center rounded-full border border-transparent bg-transparent text-[var(--text)] outline-none transition-transform duration-300 hover:scale-110 focus-visible:ring-2 focus-visible:ring-[var(--brand2)]/50"
+            style={{ filter: 'drop-shadow(0 24px 36px rgba(106,93,194,0.28))' }}
           >
-            <span className="absolute inset-0 rounded-full bg-gradient-to-br from-[var(--brand2)]/20 via-[var(--panel)] to-[var(--brand1)]/20" />
-            <span className="relative flex flex-col items-center text-[10px] font-semibold uppercase tracking-[0.3em]">
-              <span className="text-[var(--brand2)]">AI</span>
-              <span className="text-[var(--muted)]">Chat</span>
+            <span className="absolute inset-0 rounded-full bg-gradient-to-br from-white/92 via-[#f3f5ff]/88 to-white/70" />
+            <span className="absolute inset-[4px] rounded-full bg-gradient-to-br from-[#ebeefe]/95 via-white to-[#f8f9ff]/92" />
+            <span className="absolute inset-[6px] rounded-full bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.7),rgba(255,255,255,0))]" />
+            <span className="absolute inset-[6px] rounded-full border border-white/60" />
+            <span className="absolute inset-0 rounded-full opacity-0 transition-opacity duration-500 group-hover:opacity-100">
+              <span className="absolute inset-0 animate-[pulseGlow_3s_ease-in-out_infinite] rounded-full bg-[conic-gradient(from_0deg,rgba(123,91,251,0.22),rgba(255,255,255,0),rgba(60,196,255,0.22),rgba(255,255,255,0))]" />
+            </span>
+            <span className="absolute -inset-[6px] rounded-full bg-[radial-gradient(circle,rgba(123,91,251,0.18),rgba(123,91,251,0))] opacity-70 blur-[28px]" />
+            <span className="absolute inset-[10px] rounded-full bg-[radial-gradient(circle,rgba(123,91,251,0.18),rgba(123,91,251,0))] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+            <span className="relative flex h-14 w-14 flex-col items-center justify-center gap-[2px]">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-[var(--brand2)] to-[var(--brand1)] text-white shadow-[0_8px_18px_rgba(123,91,251,0.32)] transition-transform duration-300 group-hover:scale-110">
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M12 3c-3.87 0-7 2.91-7 6.5C5 11.76 6.55 13.76 8.9 14.7L8 20l4-2 4 2-.9-5.3C17.45 13.76 19 11.76 19 9.5 19 5.91 15.87 3 12 3Z"
+                    stroke="white"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M9.5 9.75h5" stroke="white" strokeWidth="1.4" strokeLinecap="round" />
+                  <path d="M9.5 12.25h5" stroke="white" strokeWidth="1.4" strokeLinecap="round" />
+                  <circle cx="9" cy="8.5" r="0.75" fill="white" />
+                  <circle cx="15" cy="8.5" r="0.75" fill="white" />
+                </svg>
+              </span>
+              <span className="flex flex-col items-center text-[9px] font-semibold uppercase tracking-[0.26em] text-[var(--brand2)]">
+                <span className="text-[var(--text)]">Ask</span>
+                <span className="text-[var(--muted)]/80">AI Chat</span>
+              </span>
             </span>
           </button>
 
@@ -162,16 +225,16 @@ export default function FloatingChat() {
                 exit={panelMotionConfig.exit}
                 transition={{ type: 'spring', damping: 22, stiffness: 220 }}
                 className={panelMotionConfig.className}
-                style={{ transformOrigin: panelMotionConfig.origin }}
+                style={{ transformOrigin: panelMotionConfig.origin, top: panelTop }}
               >
-                <div className="relative w-[min(380px,85vw)]">
+                <div ref={panelRef} className="relative w-[min(380px,85vw)]">
                   <button
                     type="button"
                     onClick={() => setIsOpen(false)}
                     aria-label="Close chat"
-                    className="absolute right-3 top-3 z-10 rounded-full border border-[var(--border)]/70 bg-[var(--panel)]/70 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--muted)] transition hover:text-[var(--text)]"
+                    className="absolute right-4 top-[-18px] z-40 flex h-7 w-7 items-center justify-center rounded-full border border-white/45 bg-white/70 text-[var(--muted)] shadow-[0_10px_26px_rgba(15,17,35,0.25)] backdrop-blur transition hover:scale-110"
                   >
-                    Close
+                    <span aria-hidden className="text-[14px] leading-none">×</span>
                   </button>
                   <div className="rounded-[22px] border border-[var(--border)] bg-[var(--panel)]/96 shadow-[0_30px_60px_rgba(17,21,41,0.28)]">
                     <Chat variant="embedded" className="max-w-none" />
