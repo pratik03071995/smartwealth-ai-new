@@ -7,7 +7,6 @@ import Home from './pages/Home'
 import Earnings from './pages/Earnings'
 import Score from './pages/Score'
 import Vendors from './pages/Vendors'
-import Sectors from './pages/Sectors'
 import CompanyInfo from './pages/CompanyInfo'
 import { ChatSessionProvider } from './components/chat/ChatSessionProvider'
 
@@ -18,7 +17,6 @@ const router = createBrowserRouter([
     { path: 'score', element: <Score /> },
     { path: 'vendors', element: <Vendors /> },
     { path: 'company-info', element: <CompanyInfo /> },
-    { path: 'sectors', element: <Sectors /> },
   ]}
 ])
 
