@@ -38,8 +38,9 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
     CRITICAL RULES - READ CAREFULLY:
     1. If the query asks for STOCK PRICE, CURRENT PRICE, or REAL-TIME QUOTES → use "web_search" with "financial_api"
     2. If the query asks for NEWS, LATEST UPDATES, or RECENT INFORMATION → use "web_search" with "web_search"  
-    3. If the query asks for ANALYTICAL DATA, SECTOR ANALYSIS, COMPARISONS, or DATABASE QUERIES → use "database_search"
-    4. If the query asks for FACTUAL INFORMATION (CEO, company info, general facts, "who is", "what is") → use "web_search" with "web_search"
+    3. If the query asks for ANALYTICAL DATA or SECTOR ANALYSIS → use "database_search".
+       If the query asks for COMPARISONS (e.g., compare companies over time) → use "web_search" with "financial_api_compare".
+    4. If the query asks for FACTUAL INFORMATION (CEO, company info, general facts, "who is", "what is") → use "web_search" with "factual_llm"  
     5. For stock price queries ONLY, extract the ticker symbol if mentioned
     6. DO NOT use financial_api for factual questions about companies
 
@@ -96,6 +97,17 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
             record_llm_provider("heuristic")
             return _fallback_heuristic_routing(user_prompt)
         
+        # Post-processing overrides to enforce product behavior
+        intent = str(analysis.get('intent') or '').lower()
+        if intent == 'factual':
+            # Force LLM factual path instead of generic web search
+            analysis['strategy'] = 'web_search'
+            analysis['search_type'] = 'factual_llm'
+        elif intent == 'comparison':
+            # Force financial API + LLM comparison path
+            analysis['strategy'] = 'web_search'
+            analysis['search_type'] = 'financial_api_compare'
+
         # Ensure strategy is valid
         if analysis['strategy'] not in ['web_search', 'database_search']:
             logger.warning("router.invalid_strategy strategy=%s response=%s", analysis.get('strategy'), analysis)

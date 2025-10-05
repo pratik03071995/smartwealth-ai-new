@@ -150,6 +150,21 @@ def _handle_web_search_query(
     """
     logger.info("chat.web.start id=%s analysis=%s", request_id, analysis)
     try:
+        # Factual questions: answer directly with LLM (DeepSeek preferred via config)
+        if analysis.get('search_type') == 'factual_llm' or str(analysis.get('intent') or '').lower() == 'factual':
+            from .chat import _llm_chat
+            llm_messages = [
+                {"role": "system", "content": "You are a precise assistant. Provide a short, factual answer. If uncertain, say so briefly."},
+                {"role": "user", "content": user_prompt},
+            ]
+            answer = _llm_chat(llm_messages, max_tokens=220, temperature=0.2, stream_handler=stream_handler)
+            return finalize_response({
+                "reply": answer,
+                "web_search": True,
+                "data_source": "llm_factual",
+                "search_provider": "DeepSeek"
+            }, request_id=request_id)
+
         # For stock price queries, use financial API directly
         if analysis.get('search_type') == 'financial_api' or any(keyword in user_prompt.lower() for keyword in ['stock price', 'price', 'current price', 'quote']):
             from .financial_api import get_stock_price
@@ -226,6 +241,59 @@ def _handle_web_search_query(
                     "data_source": "error"
                 }, request_id=request_id)
         
+        # Company comparisons backed by financial API + LLM summary
+        if analysis.get('search_type') == 'financial_api_compare' or str(analysis.get('intent') or '').lower() == 'comparison':
+            from .financial_api import get_price_history_yahoo, compute_growth_percent
+            from .web_search import _extract_symbol_from_query
+            from .chat import _llm_chat
+            import re
+            # Try to extract multiple tickers from prompt
+            symbols = list({s for s in re.findall(r'\b([A-Z]{2,5})\b', user_prompt.upper())})
+            if len(symbols) < 2:
+                # Fallback to basic mapping using names
+                name_map = { 'TESLA':'TSLA','APPLE':'AAPL','MICROSOFT':'MSFT','GOOGLE':'GOOGL','ALPHABET':'GOOGL','AMAZON':'AMZN','META':'META','NVIDIA':'NVDA','NETFLIX':'NFLX'}
+                for name, sym in name_map.items():
+                    if name.lower() in user_prompt.lower():
+                        symbols.append(sym)
+                symbols = list(dict.fromkeys(symbols))
+            # Limit to first 3 to keep it readable
+            symbols = symbols[:3]
+            if len(symbols) < 2:
+                # last resort: try single extraction twice
+                first = _extract_symbol_from_query(user_prompt)
+                if first and first not in symbols:
+                    symbols.append(first)
+            if len(symbols) < 2:
+                return finalize_response({
+                    "reply": "Please specify at least two tickers to compare (e.g., 'Compare 2y growth of AAPL and NFLX').",
+                    "web_search": True,
+                    "data_source": "financial_api_compare"
+                }, request_id=request_id)
+
+            rows = []
+            for sym in symbols:
+                hist = get_price_history_yahoo(sym, range_='2y', interval='1mo')
+                growth = compute_growth_percent(hist or [])
+                rows.append({"symbol": sym, "growth_2y": growth})
+
+            # Build a compact markdown table for the LLM to refine
+            table_lines = ["| Symbol | 2Y Growth % |", "|---|---:|"]
+            for r in rows:
+                val = f"{r['growth_2y']:.2f}%" if isinstance(r.get('growth_2y'), (int, float)) and r['growth_2y'] is not None else "—"
+                table_lines.append(f"| {r['symbol']} | {val} |")
+            context = "\n".join(table_lines)
+            prompt = f"Compare the following companies based on 2-year price growth. Provide a brief, neutral summary and include the table as-is.\n\n{context}"
+            answer = _llm_chat([
+                {"role": "system", "content": "You are a financial analyst. Be succinct and objective. If data is missing, say so."},
+                {"role": "user", "content": prompt},
+            ], temperature=0.2, max_tokens=280, stream_handler=stream_handler)
+
+            return finalize_response({
+                "reply": answer,
+                "web_search": True,
+                "data_source": "financial_api_compare"
+            }, request_id=request_id)
+
         # For other web searches, use web search API
         from .web_search import search_web, format_search_results
 

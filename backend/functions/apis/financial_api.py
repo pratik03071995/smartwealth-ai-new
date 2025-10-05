@@ -1,4 +1,4 @@
-"""Financial data API integration for real-time stock prices."""
+"""Financial data API integration for real-time stock prices and simple history."""
 from __future__ import annotations
 
 import os
@@ -162,6 +162,47 @@ def get_stock_price(symbol: str) -> Optional[Dict[str, Any]]:
     
     # Fallback to web scraping
     return get_stock_price_fallback(symbol)
+
+def get_price_history_yahoo(symbol: str, range_: str = '2y', interval: str = '1mo') -> Optional[List[Dict[str, Any]]]:
+    """Fetch simple price history (timestamp, close) from Yahoo Finance chart API.
+
+    Returns list of {t, close} or None on failure.
+    """
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        params = {"range": range_, "interval": interval}
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        result = (data.get('chart') or {}).get('result') or []
+        if not result:
+            return None
+        res0 = result[0]
+        timestamps = res0.get('timestamp') or []
+        closes = (((res0.get('indicators') or {}).get('quote') or [{}])[0]).get('close') or []
+        out: List[Dict[str, Any]] = []
+        for t, c in zip(timestamps, closes):
+            if c is None:
+                continue
+            out.append({"t": t, "close": float(c)})
+        return out or None
+    except Exception as exc:
+        logger.error("history.fetch_failed symbol=%s error=%s", symbol, exc)
+        return None
+
+def compute_growth_percent(history: List[Dict[str, Any]]) -> Optional[float]:
+    """Compute growth percentage between first and last valid close in the series."""
+    if not history:
+        return None
+    try:
+        start = next(v['close'] for v in history if v.get('close') is not None)
+        end = next(v['close'] for v in reversed(history) if v.get('close') is not None)
+        if start and end:
+            return (end / start - 1.0) * 100.0
+    except StopIteration:
+        return None
+    return None
 
 def format_stock_price_response(data: Dict[str, Any]) -> str:
     """

@@ -479,10 +479,10 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     const selected = msg.feedback ?? null
     const latencyLabel =
       typeof msg.latencyMs === 'number' && !Number.isNaN(msg.latencyMs)
-        ? `Answered in ${formatLatency(msg.latencyMs)}`
+        ? `answered in ${formatLatency(msg.latencyMs)}`
         : null
     return (
-      <div className="mt-3 flex items-center gap-2 text-[7px] uppercase tracking-[0.32em] text-[var(--muted)]">
+      <div className="mt-3 flex items-center gap-2 text-[9px] text-[var(--muted)]">
         <div className="flex items-center gap-1">
           <motion.button
             type="button"
@@ -516,10 +516,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
           </motion.button>
         </div>
         {latencyLabel ? (
-          <span className="ml-auto inline-flex items-center gap-[6px] rounded-full border border-[var(--border)]/60 bg-[var(--panel)] px-2 py-[2px] text-[7px] uppercase tracking-[0.32em] text-[var(--muted)]">
-            <span className="h-[3px] w-[3px] rounded-full bg-[var(--brand2)]/70" />
-            {latencyLabel}
-          </span>
+          <span className="ml-2 text-[10px] text-[var(--muted)]">{latencyLabel}</span>
         ) : null}
       </div>
     )
