@@ -73,8 +73,8 @@ export default function Sidebar({
     >
       <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between'} px-3 pb-3 pt-4`}>
         <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
-          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--sidebar-active-icon-bg)] text-white">
-            <MoneyIcon />
+          <div className="grid h-11 w-11 place-items-center text-[var(--sidebar-text)]">
+            <GrowthIcon />
           </div>
           {collapsed ? null : (
             <div className="leading-tight">
@@ -252,14 +252,12 @@ function SidebarSection({ title, children, collapsed }: SidebarSectionProps) {
   )
 }
 
-function MoneyIcon() {
+function GrowthIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" fill="rgba(255,255,255,0.1)" />
-      <path
-        d="M12 7.25c-1.38 0-2.5.9-2.5 2.1 0 1.05.72 1.74 2.07 2.08l.86.21c.71.18 1.07.46 1.07.93 0 .63-.62 1.02-1.55 1.02-.84 0-1.46-.32-1.75-.86a.75.75 0 0 0-1.33.7c.38.71 1.12 1.22 2.01 1.42V16a.75.75 0 0 0 1.5 0v-1.12c1.37-.23 2.32-1.11 2.32-2.39 0-1.29-.83-2.02-2.29-2.38l-.96-.23c-.73-.18-.99-.41-.99-.82 0-.48.52-.8 1.27-.8.73 0 1.28.28 1.53.74a.75.75 0 0 0 1.34-.67c-.36-.7-1.06-1.19-1.92-1.39V8a.75.75 0 0 0-1.5 0v.12Z"
-        fill="currentColor"
-      />
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M7 15l3.2-3.2 2 2L17 9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M17 9v3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="7" cy="15" r="0.9" fill="currentColor" />
     </svg>
   )
 }
@@ -287,9 +285,9 @@ function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
 function ComposeIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="4" y="4" width="16" height="16" rx="4" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M8 12.5h5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M8 9.5h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 15l6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M9 15h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   )
 }
@@ -297,10 +295,11 @@ function ComposeIcon() {
 function CalendarIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M7 3v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M17 3v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M3 9h18" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="4" y="5" width="16" height="15" rx="2.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 3.5V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M16 3.5V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M4 9.2h16" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 13l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -308,8 +307,9 @@ function CalendarIcon() {
 function ClipboardIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M15 4h1.5A2.5 2.5 0 0 1 19 6.5v12A2.5 2.5 0 0 1 16.5 21h-9A2.5 2.5 0 0 1 5 18.5v-12A2.5 2.5 0 0 1 7.5 4H9" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="9" y="3" width="6" height="3" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="5" y="4.5" width="14" height="16" rx="2.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 3.8h6a1 1 0 0 1 1 1V6H8V4.8a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 11.5h6M9 15h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   )
 }
@@ -317,9 +317,10 @@ function ClipboardIcon() {
 function BriefcaseIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M9 6V4.8C9 4.08 9.56 3.5 10.25 3.5h3.5c.69 0 1.25.58 1.25 1.3V6" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4 11h16" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="7.5" cy="12.5" r="2" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="16.5" cy="8" r="2" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="16.5" cy="17" r="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9.2 11.6l5.1-2.6M9.2 13.4l5.1 2.6" stroke="currentColor" strokeWidth="1.4" />
     </svg>
   )
 }
@@ -327,10 +328,9 @@ function BriefcaseIcon() {
 function BuildingIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M5 21V6.5A2.5 2.5 0 0 1 7.5 4H16a2.5 2.5 0 0 1 2.5 2.5V21" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M3 21h18" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M9 21v-4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M9 7h2M13 7h2M9 11h2M13 11h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="5" y="4" width="14" height="16" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 21v-4h6v4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8.5 8.5h2M13.5 8.5h2M8.5 12h2M13.5 12h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   )
 }
