@@ -8,10 +8,10 @@ type TopBarProps = {
   systemStatus: SystemStatus
   onRefreshStatus: () => void
   refreshing: boolean
+  userInitials?: string
 }
 
-export default function TopBar({ activeLabel, onToggleSidebar, systemStatus, onRefreshStatus, refreshing }: TopBarProps) {
-  const userInitials = 'P'
+export default function TopBar({ activeLabel, onToggleSidebar }: TopBarProps) {
 
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-[var(--divider)] bg-[var(--app-bg)]/90 px-4 backdrop-blur">
@@ -32,11 +32,7 @@ export default function TopBar({ activeLabel, onToggleSidebar, systemStatus, onR
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="grid h-10 w-10 place-items-center rounded-full border border-[var(--divider)] bg-white text-sm font-semibold text-[var(--text-primary)] shadow-sm">
-          {userInitials}
-        </div>
-      </div>
+      <div className="flex items-center gap-3" />
     </header>
   )
 }

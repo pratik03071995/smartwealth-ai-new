@@ -1,4 +1,6 @@
 import React from 'react'
+import { useAuth } from '../auth/AuthProvider'
+import { useNavigate } from 'react-router-dom'
 
 type SidebarProps = {
   activePath: string
@@ -24,31 +26,13 @@ type Section = {
   items: NavItem[]
 }
 
-const QUICK_ACTIONS: Section = {
-  items: [
-    { label: 'New chat', icon: <NewChatIcon />, action: 'new-chat' },
-  ],
-}
+// removed QUICK_ACTIONS; new chat now lives under the Chats section
 
-const FEATURE_SECTION: Section = {
-  title: 'Features',
-  items: [
-    { label: 'Earnings Calendar', icon: <CalendarIcon />, path: '/earnings' },
-    { label: 'Smart Scorecards', icon: <ClipboardIcon />, path: '/score' },
-    { label: 'Vendor Network', icon: <BriefcaseIcon />, path: '/vendors' },
-    { label: 'Company Info', icon: <BuildingIcon />, path: '/company-info' },
-  ],
-}
-
-const CHAT_SECTION: Section = {
+// This section now only contains a single entry: New chat
+const CHAT_SECTION_BASE: Section = {
   title: 'Chats',
-  items: [
-    { label: 'Getting started', icon: <HistoryIcon />, path: '/' },
-    { label: 'Market pulse', icon: <HistoryIcon />, path: '/' },
-  ],
+  items: [{ label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' }],
 }
-
-const SECTIONS: Section[] = [QUICK_ACTIONS, FEATURE_SECTION, CHAT_SECTION]
 
 export default function Sidebar({
   activePath,
@@ -59,6 +43,28 @@ export default function Sidebar({
   collapsed,
   onToggleCollapse,
 }: SidebarProps) {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  const FEATURE_SECTION: Section = React.useMemo(() => ({
+    title: 'Features',
+    items: [
+      { label: 'Earnings Calendar', icon: <CalendarIcon />, path: '/earnings' },
+      { label: 'Smart Scorecards', icon: <ClipboardIcon />, path: '/score' },
+      { label: 'Vendor Network', icon: <BriefcaseIcon />, path: '/vendors' },
+      { label: 'Company Info', icon: <BuildingIcon />, path: '/company-info' },
+    ],
+  }), [])
+
+  const TOP_DASHBOARD: Section | null = React.useMemo(() => (
+    user ? { items: [{ label: 'Dashboard', icon: <HomeIcon />, path: '/dashboard' }] } : null
+  ), [user])
+
+  const SECTIONS: Section[] = React.useMemo(() => {
+    const chats = CHAT_SECTION_BASE
+    return [TOP_DASHBOARD, FEATURE_SECTION, chats].filter(Boolean) as Section[]
+  }, [TOP_DASHBOARD, FEATURE_SECTION])
+
   const content = (
     <aside
       className={`fixed inset-y-0 left-0 z-30 flex h-full ${collapsed ? 'w-[68px]' : 'w-[240px]'} flex-col border-r border-[var(--sidebar-border)] bg-[var(--sidebar-bg)] transition-transform duration-200 ease-out lg:static lg:translate-x-0 ${
@@ -67,8 +73,8 @@ export default function Sidebar({
     >
       <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between'} px-3 pb-3 pt-4`}>
         <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
-          <div className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--sidebar-active-icon-bg)] text-white">
-            <MoneyIcon />
+          <div className="grid h-11 w-11 place-items-center text-[var(--sidebar-text)]">
+            <GrowthIcon />
           </div>
           {collapsed ? null : (
             <div className="leading-tight">
@@ -115,18 +121,58 @@ export default function Sidebar({
         ))}
       </nav>
 
-      <footer className={`border-t border-[var(--sidebar-border)] ${collapsed ? 'px-0 py-3 text-[10px]' : 'px-4 py-4 text-xs'} text-[var(--sidebar-muted)]`}> 
-        {collapsed ? (
-          <div className="flex flex-col items-center gap-1">
-            <span>© {new Date().getFullYear()}</span>
-            <span>SW AI</span>
+      <div className="mt-auto" />
+      <footer className={`border-t border-[var(--sidebar-border)] ${collapsed ? 'px-0 py-2 text-[10px]' : 'px-3 py-3 text-xs'} text-[var(--sidebar-muted)]`}> 
+        {user ? (
+          <div className={`${collapsed ? 'px-1' : 'px-1'}`}>
+            <div className={`flex w-full items-center gap-3 ${collapsed ? 'px-1 py-1.5' : 'px-2.5 py-2'}`}>
+              <div className="relative">
+                <div className="grid h-9 w-9 place-items-center rounded-full bg-[#E5E7EB] text-[13px] font-semibold text-[#111827] shadow-sm">
+                  {user.initials || (user.name || '?').slice(0, 1)}
+                </div>
+                <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-[var(--sidebar-bg)]" />
+              </div>
+              {collapsed ? null : (
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="truncate text-[13px] font-semibold text-[var(--sidebar-text)]">{user.name}</div>
+                  <div className="truncate text-[11px] text-[var(--sidebar-muted)]">Online</div>
+                </div>
+              )}
+              {collapsed ? null : (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await logout()
+                    onOpenChange(false)
+                    navigate('/login')
+                  }}
+                  className="ml-auto rounded-lg border border-white/20 px-2 py-[6px] text-[11px] text-white/90 hover:bg-white/10"
+                >
+                  Logout
+                </button>
+              )}
+            </div>
           </div>
         ) : (
-          <>
+          <div className={`${collapsed ? 'px-1' : 'px-3'}`}>
+            <button
+              type="button"
+              onClick={() => {
+                onOpenChange(false)
+                navigate('/login')
+              }}
+              className="w-full rounded-xl bg-[var(--sidebar-active-icon-bg)] px-3 py-2 text-center font-semibold text-white"
+            >
+              Sign in
+            </button>
+          </div>
+        )}
+        {!collapsed ? (
+          <div className="mt-3 text-[var(--sidebar-muted)]">
             <p>© {new Date().getFullYear()} SmartWealth AI</p>
             <p className="mt-1">AI-assisted financial intelligence</p>
-          </>
-        )}
+          </div>
+        ) : null}
       </footer>
     </aside>
   )
@@ -206,14 +252,20 @@ function SidebarSection({ title, children, collapsed }: SidebarSectionProps) {
   )
 }
 
-function MoneyIcon() {
+function GrowthIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M7 15l3.2-3.2 2 2L17 9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M17 9v3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="7" cy="15" r="0.9" fill="currentColor" />
+    </svg>
+  )
+}
+
+function HomeIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" fill="rgba(255,255,255,0.1)" />
-      <path
-        d="M12 7.25c-1.38 0-2.5.9-2.5 2.1 0 1.05.72 1.74 2.07 2.08l.86.21c.71.18 1.07.46 1.07.93 0 .63-.62 1.02-1.55 1.02-.84 0-1.46-.32-1.75-.86a.75.75 0 0 0-1.33.7c.38.71 1.12 1.22 2.01 1.42V16a.75.75 0 0 0 1.5 0v-1.12c1.37-.23 2.32-1.11 2.32-2.39 0-1.29-.83-2.02-2.29-2.38l-.96-.23c-.73-.18-.99-.41-.99-.82 0-.48.52-.8 1.27-.8.73 0 1.28.28 1.53.74a.75.75 0 0 0 1.34-.67c-.36-.7-1.06-1.19-1.92-1.39V8a.75.75 0 0 0-1.5 0v.12Z"
-        fill="currentColor"
-      />
+      <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5.5v-5.5h-3V21H5a1 1 0 0 1-1-1v-9.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -230,11 +282,12 @@ function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
   )
 }
 
-function NewChatIcon() {
+function ComposeIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 5v14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M5 12h14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 15l6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M9 15h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   )
 }
@@ -242,10 +295,11 @@ function NewChatIcon() {
 function CalendarIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M7 3v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M17 3v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M3 9h18" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="4" y="5" width="16" height="15" rx="2.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 3.5V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M16 3.5V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M4 9.2h16" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 13l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -253,8 +307,9 @@ function CalendarIcon() {
 function ClipboardIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M15 4h1.5A2.5 2.5 0 0 1 19 6.5v12A2.5 2.5 0 0 1 16.5 21h-9A2.5 2.5 0 0 1 5 18.5v-12A2.5 2.5 0 0 1 7.5 4H9" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="9" y="3" width="6" height="3" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="5" y="4.5" width="14" height="16" rx="2.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 3.8h6a1 1 0 0 1 1 1V6H8V4.8a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 11.5h6M9 15h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   )
 }
@@ -262,9 +317,10 @@ function ClipboardIcon() {
 function BriefcaseIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8Z" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M9 6V4.8C9 4.08 9.56 3.5 10.25 3.5h3.5c.69 0 1.25.58 1.25 1.3V6" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4 11h16" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="7.5" cy="12.5" r="2" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="16.5" cy="8" r="2" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="16.5" cy="17" r="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9.2 11.6l5.1-2.6M9.2 13.4l5.1 2.6" stroke="currentColor" strokeWidth="1.4" />
     </svg>
   )
 }
@@ -272,10 +328,9 @@ function BriefcaseIcon() {
 function BuildingIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M5 21V6.5A2.5 2.5 0 0 1 7.5 4H16a2.5 2.5 0 0 1 2.5 2.5V21" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M3 21h18" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M9 21v-4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M9 7h2M13 7h2M9 11h2M13 11h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="5" y="4" width="14" height="16" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 21v-4h6v4" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8.5 8.5h2M13.5 8.5h2M8.5 12h2M13.5 12h2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   )
 }
@@ -285,6 +340,15 @@ function HistoryIcon() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M4.5 12a7.5 7.5 0 1 1 2 5L4 20" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M12 8v4l2.5 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function UserIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 12c2.49 0 4.5-2.01 4.5-4.5S14.49 3 12 3 7.5 5.01 7.5 7.5 9.51 12 12 12Z" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M5 20.5c0-3.04 3.13-5.5 7-5.5s7 2.46 7 5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   )
 }

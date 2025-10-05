@@ -28,6 +28,7 @@ import {
   submitFeedbackAPI,
 } from './chat/ChatSessionProvider'
 import { useChatChime } from '../hooks/useChatChime'
+import { useAuth } from '../auth/AuthProvider'
 
 const compactCurrency = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -175,6 +176,7 @@ type ChatProps = {
 }
 
 export default function Chat({ variant = 'full', className }: ChatProps) {
+  const { user } = useAuth()
   const {
     messages,
     isLoading,
@@ -843,13 +845,31 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
       : null
 
   if (isCanvas) {
+    const [greetingIdx, setGreetingIdx] = React.useState<number>(() => Math.floor(Math.random() * 5))
+    React.useEffect(() => {
+      // When there are no visible messages, pick a new greeting
+      if (!visibleMessages.length) setGreetingIdx(Math.floor(Math.random() * 5))
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [visibleMessages.length])
+
+    const name = user?.name || 'there'
+    const greetings = [
+      `How can I help you?`,
+      `Good to see you, ${name}. What’s on the agenda?`,
+      `Hey ${name}, ready to dive in?`,
+      `Welcome back, ${name}. Ask anything.`,
+      `${name}, what would you like to explore?`,
+    ]
+
+    const subtitle = `${name}, ask anything about earnings, vendor relationships, or company fundamentals.`
+
     const hero = (
       <div className="flex flex-1 flex-col items-center justify-center px-4 pb-16 pt-16 text-center">
         <div className="max-w-2xl space-y-6">
           <div className="space-y-3">
-            <p className="text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-[2.5rem]">How can I help you?</p>
+            <p className="text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-[2.5rem]">{greetings[greetingIdx]}</p>
             <p className="text-sm leading-relaxed text-[var(--text-tertiary)] sm:text-base">
-              Pratik, ask anything about earnings, vendor relationships, or company fundamentals.
+              {subtitle}
             </p>
           </div>
           <motion.div layoutId="composerDock" className="mx-auto w-full max-w-3xl">
