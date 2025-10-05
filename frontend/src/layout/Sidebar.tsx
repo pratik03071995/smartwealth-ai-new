@@ -1,4 +1,6 @@
 import React from 'react'
+import { useAuth } from '../auth/AuthProvider'
+import { useNavigate } from 'react-router-dom'
 
 type SidebarProps = {
   activePath: string
@@ -26,17 +28,7 @@ type Section = {
 
 const QUICK_ACTIONS: Section = {
   items: [
-    { label: 'New chat', icon: <NewChatIcon />, action: 'new-chat' },
-  ],
-}
-
-const FEATURE_SECTION: Section = {
-  title: 'Features',
-  items: [
-    { label: 'Earnings Calendar', icon: <CalendarIcon />, path: '/earnings' },
-    { label: 'Smart Scorecards', icon: <ClipboardIcon />, path: '/score' },
-    { label: 'Vendor Network', icon: <BriefcaseIcon />, path: '/vendors' },
-    { label: 'Company Info', icon: <BuildingIcon />, path: '/company-info' },
+    { label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' },
   ],
 }
 
@@ -48,8 +40,6 @@ const CHAT_SECTION: Section = {
   ],
 }
 
-const SECTIONS: Section[] = [QUICK_ACTIONS, FEATURE_SECTION, CHAT_SECTION]
-
 export default function Sidebar({
   activePath,
   onNavigate,
@@ -59,6 +49,28 @@ export default function Sidebar({
   collapsed,
   onToggleCollapse,
 }: SidebarProps) {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  const FEATURE_SECTION: Section = React.useMemo(() => ({
+    title: 'Features',
+    items: [
+      { label: 'Earnings Calendar', icon: <CalendarIcon />, path: '/earnings' },
+      { label: 'Smart Scorecards', icon: <ClipboardIcon />, path: '/score' },
+      { label: 'Vendor Network', icon: <BriefcaseIcon />, path: '/vendors' },
+      { label: 'Company Info', icon: <BuildingIcon />, path: '/company-info' },
+    ],
+  }), [])
+
+  const TOP_DASHBOARD: Section | null = React.useMemo(() => (
+    user ? { items: [{ label: 'Dashboard', icon: <HomeIcon />, path: '/dashboard' }] } : null
+  ), [user])
+
+  const SECTIONS: Section[] = React.useMemo(
+    () => [TOP_DASHBOARD, QUICK_ACTIONS, FEATURE_SECTION, CHAT_SECTION].filter(Boolean) as Section[],
+    [TOP_DASHBOARD, FEATURE_SECTION],
+  )
+
   const content = (
     <aside
       className={`fixed inset-y-0 left-0 z-30 flex h-full ${collapsed ? 'w-[68px]' : 'w-[240px]'} flex-col border-r border-[var(--sidebar-border)] bg-[var(--sidebar-bg)] transition-transform duration-200 ease-out lg:static lg:translate-x-0 ${
@@ -115,18 +127,58 @@ export default function Sidebar({
         ))}
       </nav>
 
-      <footer className={`border-t border-[var(--sidebar-border)] ${collapsed ? 'px-0 py-3 text-[10px]' : 'px-4 py-4 text-xs'} text-[var(--sidebar-muted)]`}> 
-        {collapsed ? (
-          <div className="flex flex-col items-center gap-1">
-            <span>© {new Date().getFullYear()}</span>
-            <span>SW AI</span>
+      <div className="mt-auto" />
+      <footer className={`border-t border-[var(--sidebar-border)] ${collapsed ? 'px-0 py-2 text-[10px]' : 'px-3 py-3 text-xs'} text-[var(--sidebar-muted)]`}> 
+        {user ? (
+          <div className={`${collapsed ? 'px-1' : 'px-1'}`}>
+            <div className={`flex w-full items-center gap-3 ${collapsed ? 'px-1 py-1.5' : 'px-2.5 py-2'}`}>
+              <div className="relative">
+                <div className="grid h-9 w-9 place-items-center rounded-full bg-[#E5E7EB] text-[13px] font-semibold text-[#111827] shadow-sm">
+                  {user.initials || (user.name || '?').slice(0, 1)}
+                </div>
+                <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-2 ring-[var(--sidebar-bg)]" />
+              </div>
+              {collapsed ? null : (
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="truncate text-[13px] font-semibold text-[var(--sidebar-text)]">{user.name}</div>
+                  <div className="truncate text-[11px] text-[var(--sidebar-muted)]">Online</div>
+                </div>
+              )}
+              {collapsed ? null : (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await logout()
+                    onOpenChange(false)
+                    navigate('/login')
+                  }}
+                  className="ml-auto rounded-lg border border-white/20 px-2 py-[6px] text-[11px] text-white/90 hover:bg-white/10"
+                >
+                  Logout
+                </button>
+              )}
+            </div>
           </div>
         ) : (
-          <>
+          <div className={`${collapsed ? 'px-1' : 'px-3'}`}>
+            <button
+              type="button"
+              onClick={() => {
+                onOpenChange(false)
+                navigate('/login')
+              }}
+              className="w-full rounded-xl bg-[var(--sidebar-active-icon-bg)] px-3 py-2 text-center font-semibold text-white"
+            >
+              Sign in
+            </button>
+          </div>
+        )}
+        {!collapsed ? (
+          <div className="mt-3 text-[var(--sidebar-muted)]">
             <p>© {new Date().getFullYear()} SmartWealth AI</p>
             <p className="mt-1">AI-assisted financial intelligence</p>
-          </>
-        )}
+          </div>
+        ) : null}
       </footer>
     </aside>
   )
@@ -218,6 +270,14 @@ function MoneyIcon() {
   )
 }
 
+function HomeIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5.5v-5.5h-3V21H5a1 1 0 0 1-1-1v-9.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
   return collapsed ? (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -230,11 +290,12 @@ function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
   )
 }
 
-function NewChatIcon() {
+function ComposeIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 5v14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M5 12h14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="4" y="4" width="16" height="16" rx="4" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M8 12.5h5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M8 9.5h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   )
 }
@@ -285,6 +346,15 @@ function HistoryIcon() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M4.5 12a7.5 7.5 0 1 1 2 5L4 20" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M12 8v4l2.5 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function UserIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 12c2.49 0 4.5-2.01 4.5-4.5S14.49 3 12 3 7.5 5.01 7.5 7.5 9.51 12 12 12Z" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M5 20.5c0-3.04 3.13-5.5 7-5.5s7 2.46 7 5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   )
 }
