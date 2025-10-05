@@ -1,6 +1,8 @@
 import axios from 'axios'
 
-const rawBase = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '')
+const devFallback = import.meta.env.DEV ? 'http://localhost:5000/api' : ''
+const rawBaseInput = import.meta.env.VITE_API_BASE_URL || devFallback || ''
+const rawBase = rawBaseInput.trim().replace(/\/+$/, '')
 const apiBase = !rawBase
   ? '/api'
   : rawBase.endsWith('/api')
