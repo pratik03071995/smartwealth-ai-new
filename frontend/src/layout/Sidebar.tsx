@@ -26,18 +26,12 @@ type Section = {
   items: NavItem[]
 }
 
-const QUICK_ACTIONS: Section = {
-  items: [
-    { label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' },
-  ],
-}
+// removed QUICK_ACTIONS; new chat now lives under the Chats section
 
-const CHAT_SECTION: Section = {
+// This section now only contains a single entry: New chat
+const CHAT_SECTION_BASE: Section = {
   title: 'Chats',
-  items: [
-    { label: 'Getting started', icon: <HistoryIcon />, path: '/' },
-    { label: 'Market pulse', icon: <HistoryIcon />, path: '/' },
-  ],
+  items: [{ label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' }],
 }
 
 export default function Sidebar({
@@ -66,10 +60,10 @@ export default function Sidebar({
     user ? { items: [{ label: 'Dashboard', icon: <HomeIcon />, path: '/dashboard' }] } : null
   ), [user])
 
-  const SECTIONS: Section[] = React.useMemo(
-    () => [TOP_DASHBOARD, QUICK_ACTIONS, FEATURE_SECTION, CHAT_SECTION].filter(Boolean) as Section[],
-    [TOP_DASHBOARD, FEATURE_SECTION],
-  )
+  const SECTIONS: Section[] = React.useMemo(() => {
+    const chats = CHAT_SECTION_BASE
+    return [TOP_DASHBOARD, FEATURE_SECTION, chats].filter(Boolean) as Section[]
+  }, [TOP_DASHBOARD, FEATURE_SECTION])
 
   const content = (
     <aside
