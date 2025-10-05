@@ -15,6 +15,11 @@ from functions import (
     vendors,
     vendors_companies,
     vendors_network,
+    auth_login,
+    auth_logout,
+    auth_me,
+    portfolio_save,
+    portfolio_get,
 )
 
 bp = Blueprint("api", __name__)
@@ -37,5 +42,12 @@ bp.add_url_rule("/api/scores/ranked", view_func=scores_ranked, methods=["GET"])
 
 bp.add_url_rule("/api/companies/profiles", view_func=companies_profiles, methods=["GET"])
 bp.add_url_rule("/api/sectors", view_func=sectors, methods=["GET"])
+
+# Auth + Portfolio (MVP)
+bp.add_url_rule("/api/auth/login", view_func=auth_login, methods=["POST"])
+bp.add_url_rule("/api/auth/logout", view_func=auth_logout, methods=["POST"])
+bp.add_url_rule("/api/auth/me", view_func=auth_me, methods=["GET"])
+bp.add_url_rule("/api/portfolio", view_func=portfolio_get, methods=["GET"])
+bp.add_url_rule("/api/portfolio", view_func=portfolio_save, methods=["POST"])
 
 __all__ = ["bp"]

@@ -2,6 +2,7 @@ import React from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import Sidebar from './layout/Sidebar'
 import TopBar from './layout/TopBar'
+import { useAuth } from './auth/AuthProvider'
 import { useChatSession } from './components/chat/ChatSessionProvider'
 import type { SystemStatus } from './components/chat/ChatSessionProvider'
 
@@ -26,6 +27,7 @@ export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
   const { clearConversation, systemStatus, refreshHealth, isHealthRefreshing } = useChatSession()
+  const { user } = useAuth()
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false)
 
@@ -73,6 +75,7 @@ export default function App() {
           systemStatus={systemStatus as SystemStatus}
           onRefreshStatus={() => refreshHealth({ force: true })}
           refreshing={isHealthRefreshing}
+          userInitials={user?.initials}
         />
         <main className="flex min-h-0 flex-1 overflow-hidden bg-[var(--app-bg)]">
           <div className="flex min-h-0 flex-1 overflow-auto">

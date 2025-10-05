@@ -18,6 +18,13 @@ from .apis.chat_clean import (
     chat as chat_clean,
     chat_stream,
 )
+from .apis.auth import (
+    login as auth_login,
+    logout as auth_logout,
+    me as auth_me,
+    save_portfolio as portfolio_save,
+    get_portfolio as portfolio_get,
+)
 
 __all__ = [
     "health",
@@ -36,4 +43,9 @@ __all__ = [
     "sectors",
     "handle_chat",
     "LLMConfigurationError",
+    "auth_login",
+    "auth_logout",
+    "auth_me",
+    "portfolio_save",
+    "portfolio_get",
 ]
