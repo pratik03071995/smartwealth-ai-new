@@ -111,6 +111,13 @@ def handle_chat_clean(
     )
 
     reset_llm_provider()
+    status_prefix = "\x00STATUS:"
+    def _status(msg: str) -> None:
+        if stream_handler:
+            try:
+                stream_handler(f"{status_prefix}{msg}")
+            except Exception:
+                pass
     try:
         strategy, analysis = route_query(user_prompt)
         logger.info(
@@ -124,6 +131,7 @@ def handle_chat_clean(
             return _handle_web_search_query(
                 user_prompt, analysis, request_id, stream_handler=stream_handler
             )
+        _status("Fetching data from database…")
         return _handle_database_query(
             user_prompt, analysis, request_id, stream_handler=stream_handler
         )
@@ -169,13 +177,13 @@ def _handle_web_search_query(
         if analysis.get('search_type') == 'financial_api' or any(keyword in user_prompt.lower() for keyword in ['stock price', 'price', 'current price', 'quote']):
             from .financial_api import get_stock_price
             from .web_search import _extract_symbol_from_query, search_web, format_search_results
+            from ..analysis.timeseries_repository import fetch_series
+            from ..analysis.chart_builder import build_single_series_scatter
             from .response_enhancer import enhance_financial_response_with_ollama
             
             symbol = _extract_symbol_from_query(user_prompt)
             if symbol:
-                search_future = NETWORK_POOL.submit(
-                    search_web, f"{symbol} stock price current", 3
-                )
+                search_future = None  # no need to hit web search for price path
                 try:
                     stock_data = get_stock_price(symbol)
                 except Exception as fetch_exc:
@@ -186,16 +194,20 @@ def _handle_web_search_query(
                     response = enhance_financial_response_with_ollama(
                         stock_data, user_prompt, stream_handler=stream_handler
                     )
-                    search_future.cancel()
-                    return finalize_response({
+                    if search_future:
+                        search_future.cancel()
+                    payload = {
                         "reply": response,
                         "web_search": True,
                         "data_source": "financial_api_enhanced",
-                        "search_provider": "Financial API"
-                    }, request_id=request_id)
+                        "search_provider": "Financial API",
+                    }
+                    # Provide a single follow-up like ChatGPT: "Show chart for SYMBOL"
+                    payload["followups"] = [f"Show chart for {symbol}"]
+                    return finalize_response(payload, request_id=request_id)
                 else:
                     # If financial API fails, fall back to web results (already in flight)
-                    web_results = search_future.result()
+                    web_results = search_future.result() if search_future else []
                     provider_label = None
                     if web_results:
                         provider_label = web_results[0].get("source")
@@ -270,28 +282,31 @@ def _handle_web_search_query(
                     "data_source": "financial_api_compare"
                 }, request_id=request_id)
 
-            rows = []
-            for sym in symbols:
-                hist = get_price_history_yahoo(sym, range_='2y', interval='1mo')
-                growth = compute_growth_percent(hist or [])
-                rows.append({"symbol": sym, "growth_2y": growth})
+            # Use Databricks time-series repository for comparison
+            from ..analysis.comparer import compare_symbols
+            from ..analysis.chart_builder import build_growth_bar_chart
 
-            # Build a compact markdown table for the LLM to refine
-            table_lines = ["| Symbol | 2Y Growth % |", "|---|---:|"]
-            for r in rows:
-                val = f"{r['growth_2y']:.2f}%" if isinstance(r.get('growth_2y'), (int, float)) and r['growth_2y'] is not None else "—"
-                table_lines.append(f"| {r['symbol']} | {val} |")
-            context = "\n".join(table_lines)
-            prompt = f"Compare the following companies based on 2-year price growth. Provide a brief, neutral summary and include the table as-is.\n\n{context}"
+            _status("Fetching data from database…")
+            table, bar_data, preview = compare_symbols(symbols, "2Y")
+            _status("Computing growth and aligning series…")
+            chart = build_growth_bar_chart(bar_data)
+            # Create brief summary via LLM
+            md_lines = ["| Symbol | Growth % |", "|---|---:|"]
+            for r in bar_data:
+                md_lines.append(f"| {r['label']} | {r['value']:.2f}% |")
+            summary_prompt = "\n".join(md_lines)
             answer = _llm_chat([
-                {"role": "system", "content": "You are a financial analyst. Be succinct and objective. If data is missing, say so."},
-                {"role": "user", "content": prompt},
-            ], temperature=0.2, max_tokens=280, stream_handler=stream_handler)
+                {"role": "system", "content": "You are a financial analyst. Summarize the table briefly and objectively."},
+                {"role": "user", "content": summary_prompt},
+            ], temperature=0.2, max_tokens=200, stream_handler=stream_handler)
 
             return finalize_response({
                 "reply": answer,
-                "web_search": True,
-                "data_source": "financial_api_compare"
+                "web_search": False,
+                "data_source": "database",
+                "table": table,
+                "chart": chart,
+                "tablePreview": preview,
             }, request_id=request_id)
 
         # For other web searches, use web search API
@@ -346,7 +361,106 @@ def _handle_database_query(
     """
     logger.info("chat.database.start id=%s analysis=%s", request_id, analysis)
 
-    # Use heuristic planning for database queries
+    # Comparison path: use Databricks series repository directly
+    if str(analysis.get('intent') or '').lower() == 'comparison' or str(analysis.get('search_type') or '') == 'database_compare':
+        from ..analysis.comparer import compare_symbols
+        from ..analysis.chart_builder import build_growth_bar_chart
+        from .chat import _llm_chat
+        import re
+
+        # Extract symbols (support multi)
+        raw_matches = re.findall(r'\b([A-Z]{2,5})\b', user_prompt.upper())
+        seen = set()
+        symbols = []
+        for sym in raw_matches:
+            if sym not in seen:
+                seen.add(sym)
+                symbols.append(sym)
+        if len(symbols) < 2:
+            name_map = { 'TESLA':'TSLA','APPLE':'AAPL','MICROSOFT':'MSFT','GOOGLE':'GOOGL','ALPHABET':'GOOGL','AMAZON':'AMZN','META':'META','NVIDIA':'NVDA','NETFLIX':'NFLX'}
+            for name, sym in name_map.items():
+                if name.lower() in user_prompt.lower():
+                    if sym not in seen:
+                        seen.add(sym)
+                        symbols.append(sym)
+        if len(symbols) < 2:
+            return finalize_response({
+                "reply": "Please specify at least two tickers to compare (e.g., AAPL, MSFT).",
+                "data_source": "database"
+            }, request_id=request_id)
+
+        # Parse timeframe
+        timeframe = '2Y'
+        for tag in ['1D','5D','1M','6M','YTD','1Y','2Y','5Y']:
+            if tag.lower() in user_prompt.lower():
+                timeframe = tag
+                break
+
+        if stream_handler:
+            try:
+                stream_handler("\x00STATUS:Fetching data from database…")
+            except Exception:
+                pass
+        table, bar_data, preview = compare_symbols(symbols, timeframe)
+        if stream_handler:
+            try:
+                stream_handler("\x00STATUS:Generating chart…")
+            except Exception:
+                pass
+        chart = build_growth_bar_chart(bar_data)
+        md_lines = ["| Symbol | Growth % |", "|---|---:|"]
+        for r in bar_data:
+            md_lines.append(f"| {r['label']} | {r['value']:.2f}% |")
+        answer = _llm_chat([
+            {"role": "system", "content": "You are a financial analyst. Summarize briefly and objectively."},
+            {"role": "user", "content": "\n".join(md_lines)},
+        ], temperature=0.2, max_tokens=180, stream_handler=stream_handler)
+        return finalize_response({
+            "reply": answer,
+            "table": table,
+            "tablePreview": preview,
+            "chart": chart,
+            "data_source": "database",
+        }, request_id=request_id)
+
+    # Single-symbol chart path (on-demand follow-up like "Show 1Y chart for GOOGL")
+    if str(analysis.get('intent') or '').lower() == 'chart' or str(analysis.get('search_type') or '') == 'database_chart':
+        from ..analysis.timeseries_repository import fetch_series
+        from ..analysis.chart_builder import build_single_series_line
+        import re
+        # Extract window and symbol
+        window = '1Y'
+        for tag in ['1D','5D','1M','6M','YTD','1Y','2Y','5Y']:
+            if tag.lower() in user_prompt.lower():
+                window = tag
+                break
+        raw_matches = re.findall(r'\b([A-Z]{2,5})\b', user_prompt.upper())
+        STOP = {"SHOW","CHART","FOR","THE","A","AN","PRICE","STOCK","OF"}
+        symbol = None
+        for tok in raw_matches:
+            if tok not in STOP:
+                symbol = tok
+                break
+        if not symbol:
+            return finalize_response({
+                "reply": "Please specify the ticker to chart (e.g., 'Show 1Y chart for AAPL').",
+                "data_source": "database"
+            }, request_id=request_id)
+        series_map = fetch_series([symbol], window)
+        pts = series_map.get(symbol) or []
+        if not pts:
+            return finalize_response({
+                "reply": f"No time-series data found in Databricks for {symbol} ({window}).",
+                "data_source": "database"
+            }, request_id=request_id)
+        chart = build_single_series_line(symbol, pts, window=window)
+        return finalize_response({
+            "reply": f"Here is the {window} chart for {symbol}.",
+            "chart": chart,
+            "data_source": "database",
+        }, request_id=request_id)
+
+    # Use heuristic planning for other database queries
     plan_dict = _heuristic_plan_data(user_prompt)
     
     try:
@@ -486,7 +600,12 @@ def chat_stream():
         while True:
             kind, payload = queue.get()
             if kind == "delta":
-                yield f"data: {json.dumps({'type': 'delta', 'delta': payload})}\n\n"
+                # Detect status messages sent via the stream handler
+                if isinstance(payload, str) and payload.startswith("\x00STATUS:"):
+                    msg = payload.split(":", 1)[1]
+                    yield f"data: {json.dumps({'type': 'status', 'message': msg})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'delta', 'delta': payload})}\n\n"
             elif kind == "result":
                 yield f"data: {json.dumps({'type': 'result', 'data': payload})}\n\n"
             elif kind == "error":

@@ -11,7 +11,10 @@ import {
   Legend,
   ScatterChart,
   Scatter,
+  LineChart,
+  Line,
 } from 'recharts'
+import StockLineCard from './charts/StockLineCard'
 
 import {
   AssistantMsg,
@@ -182,6 +185,8 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     isLoading,
     isStreaming,
     pendingLatencyMs,
+    statusLines,
+    lastChart,
     systemStatus,
     healthSnapshot,
     isHealthRefreshing,
@@ -190,6 +195,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     clearConversation,
     updateMessages,
   } = useChatSession()
+  
   const [input, setInput] = useState('')
   const [chartSpec, setChartSpec] = useState<ChartPayload | null>(null)
   const [graphOpen, setGraphOpen] = useState(false)
@@ -198,6 +204,22 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   const endRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [glowPulse, setGlowPulse] = useState(false)
+  const [chartUpdateTrigger, setChartUpdateTrigger] = useState(0)
+  // Global fallback: if context didn’t propagate, read the window-exposed chart
+  const [globalChart, setGlobalChart] = useState<any>(null)
+  useEffect(() => {
+    try { (window as any).__SW_CHAT_RENDERED__ = true } catch {}
+    try {
+      const w = window as any
+      if (w.__SW_LAST_CHART__) setGlobalChart(w.__SW_LAST_CHART__)
+      if (w.SW_LAST_CHART) setGlobalChart(w.SW_LAST_CHART)
+      const id = window.setInterval(() => {
+        if (w.__SW_LAST_CHART__) setGlobalChart(w.__SW_LAST_CHART__)
+        else if (w.SW_LAST_CHART) setGlobalChart(w.SW_LAST_CHART)
+      }, 800)
+      return () => window.clearInterval(id)
+    } catch {}
+  }, [])
   const prevStreamingRef = useRef(isStreaming)
   const { play: playChime, muted: chimeMuted, toggleMute: toggleChimeMute } = useChatChime()
 
@@ -364,6 +386,16 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   const renderTable = (table: TablePayload | undefined) => {
     if (!table || !table.rows?.length) return null
 
+    const formatDateTick = (value: any) => {
+      try {
+        const d = new Date(String(value))
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        }
+      } catch {}
+      return ''
+    }
+
     return (
       <div className="mt-3 overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--bg)]/70 shadow-inner">
         <table className="w-full min-w-[22rem] border-separate border-spacing-y-2 text-xs">
@@ -526,21 +558,96 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     if (!msg.followups || msg.followups.length === 0) return null
     return (
       <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] text-[var(--muted)]">
-        {msg.followups.slice(0, 4).map((tip, idx) => (
-          <button
-            key={`${msg.id}-followup-${idx}`}
-            type="button"
-            onClick={() => {
-              send(tip)
-              setTimeout(() => inputRef.current?.focus(), 0)
-            }}
-            className="rounded-full border border-[var(--border)] bg-[var(--panel)] px-2 py-[5px] text-[9px] uppercase tracking-wider text-[var(--brand2)] transition hover:bg-[var(--panel)]/80"
-          >
-            {tip}
-          </button>
-        ))}
+        {msg.followups.slice(0, 4).map((tip, idx) => {
+          // Check if this is a chart-related followup
+          const isChartFollowup = tip.toLowerCase().includes('chart') && tip.toLowerCase().includes('for')
+          
+          return (
+            <button
+              key={`${msg.id}-followup-${idx}`}
+              type="button"
+              onClick={() => {
+                // Always send the message for followups - let the backend handle chart generation
+                send(tip)
+                setTimeout(() => inputRef.current?.focus(), 0)
+              }}
+              className="rounded-full border border-[var(--border)] bg-[var(--panel)] px-2 py-[5px] text-[9px] uppercase tracking-wider text-[var(--brand2)] transition hover:bg-[var(--panel)]/80"
+            >
+              {tip}
+            </button>
+          )
+        })}
       </div>
     )
+  }
+
+  function InlineLineChart({ spec, updateTrigger }: { spec: Extract<ChartPayload, { type: 'line' }>, updateTrigger?: number }) {
+    // Use the current window from the spec, but also check the window object for updates
+    const currentChart = (window as any).__SW_LAST_CHART__ || spec
+    const selWindow = currentChart.window || '1Y'
+    const windows = currentChart.availableWindows && currentChart.availableWindows.length
+      ? currentChart.availableWindows
+      : ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y']
+    const symbol = currentChart.symbol || (currentChart.series[0]?.name ?? '')
+    const data = (currentChart.series[0]?.points || [])
+    const hasPoints = Array.isArray(data) && data.length > 0
+
+    const SvgFallback = () => {
+      const w = 680
+      const h = 220
+      const pad = 24
+      const xs = data.map((p, i) => i)
+      const ys = data.map((p) => Number(p.close))
+      const minY = Math.min(...ys)
+      const maxY = Math.max(...ys)
+      const minX = 0
+      const maxX = Math.max(1, xs.length - 1)
+      const sx = (i: number) => pad + ((w - pad * 2) * (i - minX)) / (maxX - minX || 1)
+      const sy = (v: number) => h - pad - ((h - pad * 2) * (v - minY)) / (maxY - minY || 1)
+      const d = data
+        .map((p, i) => `${i === 0 ? 'M' : 'L'} ${sx(i).toFixed(2)} ${sy(Number(p.close)).toFixed(2)}`)
+        .join(' ')
+      return (
+        <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={`${symbol} inline chart`}>
+          <rect x="0" y="0" width={w} height={h} fill="#ffffff" />
+          <path d={d} stroke="#10a37f" strokeWidth="2" fill="none" />
+        </svg>
+      )
+    }
+
+    return (
+      <div className="rounded-2xl border border-[var(--divider)] bg-white p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="text-sm font-semibold">{symbol}</div>
+          <div className="flex gap-1 text-xs">
+            {(['1D','1W','1M','3M','1Y','All'] as const).map((w) => (
+              <button key={w}
+                onClick={() => {
+                  // Update the window in the existing chart data instead of sending a new message
+                  const windowValue = w === '1W' ? '5D' : w === 'All' ? '5Y' : w
+                  const currentChart = (window as any).__SW_LAST_CHART__
+                  if (currentChart) {
+                    (window as any).__SW_LAST_CHART__ = { ...currentChart, window: windowValue }
+                    // Force a re-render by updating the trigger
+                    setChartUpdateTrigger(prev => prev + 1)
+                  }
+                }}
+                className={`rounded-lg border px-2 py-1 ${selWindow===w? 'border-[var(--divider)] bg-black/[0.03] text-[var(--text-primary)]':'border-[var(--divider)] bg-white text-[var(--text-tertiary)] hover:bg-black/[0.03]'}`}
+              >{w}</button>
+            ))}
+          </div>
+        </div>
+        <div className="h-64 w-full">
+          {hasPoints ? <SvgFallback /> : (
+            <div className="grid h-full place-items-center text-[12px] text-[var(--muted)]">No time‑series points</div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  function hasLineSeries(spec: any): spec is { series: { name: string; points: { t: string; close: number }[] }[] } {
+    return !!spec && Array.isArray(spec.series) && spec.series.length > 0 && Array.isArray(spec.series[0]?.points)
   }
 
   function handleOpenChart(spec: ChartPayload) {
@@ -901,13 +1008,29 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                     </div>
                   ) : null}
                   {renderTableSection(m)}
-                  {isAssistant(m) && m.chart?.data?.length ? (
-                    <button
-                      onClick={() => handleOpenChart(m.chart!)}
-                      className="rounded-lg border border-[var(--divider)] bg-[var(--panel)] px-3 py-2 text-xs uppercase tracking-wide text-[var(--brand2)] hover:opacity-90"
-                    >
-                      Explore Chart
-                    </button>
+                  {isAssistant(m) && (m.chart || lastChart || (window as any).__SW_LAST_CHART__) && !m.followups?.some(f => f.toLowerCase().includes('chart')) ? (
+                    (() => {
+                      const chartData = (m.chart as any) || lastChart || (window as any).__SW_LAST_CHART__
+                      const hasValidLineData = chartData && (
+                        chartData.type === 'line' || 
+                        hasLineSeries(chartData) ||
+                        (chartData.series && Array.isArray(chartData.series) && chartData.series.length > 0 && chartData.series[0]?.points)
+                      )
+                      if (hasValidLineData) {
+                        return <InlineLineChart spec={{ type: 'line', ...chartData }} updateTrigger={chartUpdateTrigger} />
+                      }
+                      if (chartData?.data?.length) {
+                        return (
+                          <button
+                            onClick={() => handleOpenChart(chartData)}
+                            className="rounded-lg border border-[var(--divider)] bg-[var(--panel)] px-3 py-2 text-xs uppercase tracking-wide text-[var(--brand2)] hover:opacity-90"
+                          >
+                            Explore Chart
+                          </button>
+                        )
+                      }
+                      return null
+                    })()
                   ) : null}
                   {isAssistant(m) && m.sql ? (
                     <details className="mt-2 text-xs text-[var(--muted)]">
@@ -1065,6 +1188,16 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
         <div className="mt-3 h-px w-full bg-gradient-to-r from-transparent via-[var(--brand2)]/35 to-transparent" />
 
         <div className={`flex flex-col gap-3 ${scrollAreaClasses} scroll-slim`}>
+          {isStreaming && statusLines && statusLines.length ? (
+            <div className="mx-auto mb-1 mt-1 w-full max-w-3xl space-y-1 px-1 text-[11px] text-[var(--text-tertiary)]">
+              {statusLines.map((line, idx) => (
+                <div key={`status-${idx}`} className="flex items-center gap-2">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#10a37f]/80" />
+                  <span className="truncate">{line}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {visibleMessages.map((m, i) => {
             const baseAlignment = 'group relative max-w-[90%] rounded-2xl border px-4 py-4 text-sm transition-all duration-200'
             const bubbleTone =
@@ -1134,13 +1267,32 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                     </div>
                   ) : null}
                   {renderTableSection(m)}
-                  {isAssistant(m) && m.chart?.data?.length ? (
+                  {isAssistant(m) && (m.chart || lastChart || (window as any).__SW_LAST_CHART__) ? (
+                    (() => {
+                      const chartData = (m.chart as any) || lastChart || (window as any).__SW_LAST_CHART__
+                      const hasValidLineData = chartData && (
+                        chartData.type === 'line' || 
+                        hasLineSeries(chartData) ||
+                        (chartData.series && Array.isArray(chartData.series) && chartData.series.length > 0 && chartData.series[0]?.points)
+                      )
+                      if (hasValidLineData) {
+                        return <InlineLineChart spec={{ type: 'line', ...chartData }} updateTrigger={chartUpdateTrigger} />
+                      }
+                      return null
+                    })()
+                  ) : null}
+                  {isAssistant(m) && m.chart && !(((m.chart as any).type === 'line') || hasLineSeries(m.chart)) && (m.chart as any).data?.length ? (
                     <button
                       onClick={() => handleOpenChart(m.chart!)}
                       className="rounded-lg border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs uppercase tracking-wide text-[var(--brand2)] hover:opacity-90"
                     >
                       Explore Chart
                     </button>
+                  ) : null}
+                  {isAssistant(m) && m.chart && !(((m.chart as any).type === 'line') || hasLineSeries(m.chart)) && !(m.chart as any).data ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-[11px] text-amber-700">
+                      Chart payload received but unrecognized shape. Please refresh.
+                    </div>
                   ) : null}
                   {isAssistant(m) && m.sql ? (
                     <details className="text-xs text-[var(--muted)]">
@@ -1163,6 +1315,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
           {composer}
         </div>
       </div>
+
 
       {chartModal}
     </div>

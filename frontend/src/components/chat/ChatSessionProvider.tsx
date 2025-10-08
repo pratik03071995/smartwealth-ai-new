@@ -20,6 +20,17 @@ export type ChartPayload =
       data: ScatterDatum[]
       sizeKey?: string
     }
+  | {
+      type: 'line'
+      title: string
+      xKey: 't'
+      yKey: 'close'
+      format?: { y?: ChartFormat }
+      series: { name: string; points: { t: string; close: number }[] }[]
+      window?: string
+      availableWindows?: string[]
+      symbol?: string
+    }
 
 export type SystemStatus = 'checking' | 'ready' | 'degraded' | 'unavailable'
 
@@ -92,6 +103,7 @@ type ChatSessionValue = {
   isLoading: boolean
   isStreaming: boolean
   pendingLatencyMs: number
+  statusLines: string[]
   systemStatus: SystemStatus
   healthSnapshot: HealthSnapshot | null
   isHealthRefreshing: boolean
@@ -99,6 +111,7 @@ type ChatSessionValue = {
   sendMessage: (text: string) => Promise<void>
   clearConversation: () => void
   updateMessages: React.Dispatch<React.SetStateAction<Msg[]>>
+  lastChart: ChartPayload | null
 }
 
 const ChatSessionContext = createContext<ChatSessionValue | undefined>(undefined)
@@ -116,6 +129,8 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
   const [isLoading, setIsLoading] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
   const [pendingLatencyMs, setPendingLatencyMs] = useState(0)
+  const [statusLines, setStatusLines] = useState<string[]>([])
+  const [lastChart, setLastChart] = useState<ChartPayload | null>(null)
   const [systemStatus, setSystemStatus] = useState<SystemStatus>('checking')
   const [healthSnapshot, setHealthSnapshot] = useState<HealthSnapshot | null>(null)
   const [isHealthRefreshing, setIsHealthRefreshing] = useState(false)
@@ -321,10 +336,21 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
 
             if (payload.type === 'delta' && typeof payload.delta === 'string') {
               appendDelta(payload.delta)
+            } else if (payload.type === 'status' && typeof payload.message === 'string') {
+              // Append a compact status line (keep last 5)
+              setStatusLines((prev) => {
+                const next = [...prev, payload.message]
+                return next.slice(-5)
+              })
             } else if (payload.type === 'result') {
               const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
               const latencyMs = Math.max(0, endedAt - startedAt)
               const data = payload.data ?? {}
+              try {
+                if (data && data.chart) {
+                  ;(window as any).__SW_LAST_CHART__ = data.chart
+                }
+              } catch {}
               currentAssistantId = (data.messageId as string) || currentAssistantId
               const sourceLabel = (data.sourceLabel as string | undefined) ?? null
               const dataSource = (data.data_source as string | undefined) ?? null
@@ -359,6 +385,9 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
                     : entry,
                 ),
               )
+              setLastChart((data.chart as ChartPayload | undefined) ?? null)
+              // Clear transient status lines after result
+              setStatusLines([])
             } else if (payload.type === 'error') {
               setMessages((prev) =>
                 prev.map((entry) =>
@@ -370,8 +399,10 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
                     : entry,
                 ),
               )
+              setStatusLines([])
             } else if (payload.type === 'end') {
               finished = true
+              setStatusLines([])
               break
             }
           }
@@ -434,6 +465,7 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
       isLoading,
       isStreaming,
       pendingLatencyMs,
+      statusLines,
       systemStatus,
       healthSnapshot,
       isHealthRefreshing,
@@ -441,18 +473,21 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
       sendMessage,
       clearConversation,
       updateMessages: setMessages,
+      lastChart,
     }),
     [
       messages,
       isLoading,
       isStreaming,
       pendingLatencyMs,
+      statusLines,
       systemStatus,
       healthSnapshot,
       isHealthRefreshing,
       refreshHealth,
       sendMessage,
       clearConversation,
+      lastChart,
     ],
   )
 

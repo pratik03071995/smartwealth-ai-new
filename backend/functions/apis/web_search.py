@@ -325,11 +325,15 @@ def _extract_symbol_from_query(query: str) -> Optional[str]:
         if company in query_lower:
             return symbol
     
-    # Check for ticker symbols (3-5 uppercase letters)
+    # Check for ticker symbols (3-5 uppercase letters) while ignoring common words
     import re
-    ticker_match = re.search(r'\b([A-Z]{3,5})\b', query.upper())
-    if ticker_match:
-        return ticker_match.group(1)
+    STOP = {"SHOW", "CHART", "PRICE", "STOCK", "FOR", "OF", "THE", "IN", "AT"}
+    tokens = re.findall(r'\b([A-Z]{2,5})\b', query.upper())
+    for tok in tokens:
+        if tok in STOP:
+            continue
+        # Prefer tokens that are not pure English words; basic filter
+        return tok
     
     return None
 
