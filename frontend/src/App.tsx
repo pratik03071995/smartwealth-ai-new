@@ -26,7 +26,7 @@ type OutletContext = {
 export default function App() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { clearConversation, systemStatus, refreshHealth, isHealthRefreshing } = useChatSession()
+  const { systemStatus, refreshHealth, isHealthRefreshing, startNewSession } = useChatSession()
   const { user } = useAuth()
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false)
@@ -48,10 +48,13 @@ export default function App() {
   )
 
   const handleNewChat = React.useCallback(() => {
-    clearConversation()
-    navigate('/')
-    setSidebarOpen(false)
-  }, [clearConversation, navigate])
+    startNewSession()
+      .catch((error) => console.error('Failed to start new chat session', error))
+      .finally(() => {
+        navigate('/')
+        setSidebarOpen(false)
+      })
+  }, [startNewSession, navigate])
 
   const context = React.useMemo<OutletContext>(() => ({ onNewChat: handleNewChat }), [handleNewChat])
   const pageTitle = React.useMemo(() => resolveRouteTitle(location.pathname), [location.pathname])

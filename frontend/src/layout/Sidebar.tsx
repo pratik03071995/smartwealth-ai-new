@@ -1,6 +1,7 @@
 import React from 'react'
 import { useAuth } from '../auth/AuthProvider'
 import { useNavigate } from 'react-router-dom'
+import { useChatSession } from '../components/chat/ChatSessionProvider'
 
 type SidebarProps = {
   activePath: string
@@ -18,20 +19,9 @@ type NavItem = {
   path?: string
   badge?: string
   disabled?: boolean
-  action?: 'new-chat'
-}
-
-type Section = {
-  title?: string
-  items: NavItem[]
-}
-
-// removed QUICK_ACTIONS; new chat now lives under the Chats section
-
-// This section now only contains a single entry: New chat
-const CHAT_SECTION_BASE: Section = {
-  title: 'Chats',
-  items: [{ label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' }],
+  action?: 'new-chat' | 'open-session'
+  sessionId?: string
+  onDelete?: () => void
 }
 
 export default function Sidebar({
@@ -45,25 +35,90 @@ export default function Sidebar({
 }: SidebarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const { sessions, activeSessionId, openSession, deleteSession } = useChatSession()
 
-  const FEATURE_SECTION: Section = React.useMemo(() => ({
-    title: 'Features',
-    items: [
+  const [featuresOpen, setFeaturesOpen] = React.useState(true)
+  const [chatsOpen, setChatsOpen] = React.useState(true)
+
+  const featureItems: NavItem[] = React.useMemo(
+    () => [
       { label: 'Earnings Calendar', icon: <CalendarIcon />, path: '/earnings' },
       { label: 'Smart Scorecards', icon: <ClipboardIcon />, path: '/score' },
       { label: 'Vendor Network', icon: <BriefcaseIcon />, path: '/vendors' },
       { label: 'Company Info', icon: <BuildingIcon />, path: '/company-info' },
     ],
-  }), [])
+    [],
+  )
 
-  const TOP_DASHBOARD: Section | null = React.useMemo(() => (
-    user ? { items: [{ label: 'Dashboard', icon: <HomeIcon />, path: '/dashboard' }] } : null
-  ), [user])
+  const chatItems: NavItem[] = React.useMemo(
+    () =>
+      sessions.map<NavItem>((session) => ({
+        label: session.title || 'New chat',
+        icon: <ChatBubbleIcon />,
+        action: 'open-session',
+        sessionId: session.id,
+        path: '/',
+        onDelete: () => deleteSession(session.id),
+      })),
+    [sessions, deleteSession],
+  )
 
-  const SECTIONS: Section[] = React.useMemo(() => {
-    const chats = CHAT_SECTION_BASE
-    return [TOP_DASHBOARD, FEATURE_SECTION, chats].filter(Boolean) as Section[]
-  }, [TOP_DASHBOARD, FEATURE_SECTION])
+  const renderNavItem = React.useCallback(
+    (item: NavItem) => {
+      const isActive = item.sessionId
+        ? item.sessionId === activeSessionId
+        : item.action === 'new-chat'
+          ? !activeSessionId && activePath === '/'
+          : item.path
+            ? (item.path === '/' ? activePath === item.path : activePath.startsWith(item.path))
+            : false
+
+      const disabled = item.disabled && !item.path
+
+      const handleClick = () => {
+        if (item.action === 'new-chat') {
+          onNewChat()
+          onOpenChange(false)
+          return
+        }
+        if (item.action === 'open-session' && item.sessionId) {
+          openSession(item.sessionId)
+            .then(() => {
+              onNavigate('/')
+              onOpenChange(false)
+            })
+            .catch((error) => console.error('Failed to open session', error))
+          return
+        }
+        if (item.path) {
+          onNavigate(item.path)
+          onOpenChange(false)
+        }
+      }
+
+      return (
+        <SidebarButton
+          key={item.sessionId ?? item.label}
+          label={item.label}
+          icon={item.icon}
+          active={isActive}
+          onClick={disabled ? undefined : handleClick}
+          disabled={disabled}
+          collapsed={collapsed}
+          onDelete={item.onDelete}
+        />
+      )
+    },
+    [
+      activePath,
+      activeSessionId,
+      collapsed,
+      onNavigate,
+      onNewChat,
+      onOpenChange,
+      openSession,
+    ],
+  )
 
   const content = (
     <aside
@@ -93,32 +148,30 @@ export default function Sidebar({
       </div>
 
       <nav className={`flex-1 overflow-y-auto ${collapsed ? 'px-1.5' : 'px-2.5'} pb-6`}> 
-        {SECTIONS.map((section, index) => (
-          <SidebarSection key={section.title ?? index} title={section.title} collapsed={collapsed}>
-            {section.items.map((item) => {
-              const isActive = !!item.path && activePath.startsWith(item.path)
-              const handleClick = () => {
-                if (item.action === 'new-chat') {
-                  onNewChat()
-                  return
-                }
-                if (item.path) onNavigate(item.path)
-              }
-              const disabled = item.disabled && !item.path
-              return (
-                <SidebarButton
-                  key={item.label}
-                  label={item.label}
-                  icon={item.icon}
-                  active={isActive}
-                  onClick={disabled ? undefined : handleClick}
-                  disabled={disabled}
-                  collapsed={collapsed}
-                />
-              )
-            })}
-          </SidebarSection>
-        ))}
+        {user ? renderNavItem({ label: 'Dashboard', icon: <HomeIcon />, path: '/dashboard' }) : null}
+        {renderNavItem({ label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' })}
+
+        <CollapsibleSection
+          title="Features"
+          collapsed={collapsed}
+          open={featuresOpen}
+          onToggle={() => setFeaturesOpen((prev) => !prev)}
+        >
+          {featuresOpen ? featureItems.map(renderNavItem) : null}
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          title="Chats"
+          collapsed={collapsed}
+          open={chatsOpen}
+          onToggle={() => setChatsOpen((prev) => !prev)}
+        >
+          {chatsOpen && chatItems.length > 0
+            ? chatItems.map(renderNavItem)
+            : chatsOpen
+              ? <EmptyState collapsed={collapsed} />
+              : null}
+        </CollapsibleSection>
       </nav>
 
       <div className="mt-auto" />
@@ -197,21 +250,22 @@ type SidebarButtonProps = {
   active?: boolean
   disabled?: boolean
   collapsed?: boolean
+  onDelete?: () => void
 }
 
-function SidebarButton({ label, icon, onClick, active, disabled, collapsed }: SidebarButtonProps) {
+function SidebarButton({ label, icon, onClick, active, disabled, collapsed, onDelete }: SidebarButtonProps) {
   const baseClasses = [
     'group relative flex w-full items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-colors',
     active
       ? 'bg-[var(--sidebar-active-bg)] text-[var(--sidebar-accent-text)]'
       : 'text-[var(--sidebar-muted)] hover:bg-[var(--sidebar-hover-bg)] hover:text-[var(--sidebar-text)]',
     disabled ? 'cursor-not-allowed opacity-60' : '',
-    collapsed ? 'justify-center px-1 py-2.5' : '',
+    collapsed ? 'justify-center px-1 py-2.5' : onDelete ? 'pr-12' : '',
   ]
     .filter(Boolean)
     .join(' ')
 
-  return (
+  const mainButton = (
     <button type="button" className={baseClasses} onClick={onClick} disabled={disabled} title={collapsed ? label : undefined}>
       <span
         className={`grid h-9 w-9 place-items-center rounded-xl text-[var(--sidebar-muted)] transition ${
@@ -223,33 +277,70 @@ function SidebarButton({ label, icon, onClick, active, disabled, collapsed }: Si
       {collapsed ? null : <span className="flex-1 text-left leading-5">{label}</span>}
     </button>
   )
+
+  if (!onDelete || collapsed) {
+    return mainButton
+  }
+
+  return (
+    <div className="relative w-full">
+      {mainButton}
+      <button
+        type="button"
+        className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-[#ef4444] opacity-0 transition hover:bg-[#fee2e2] hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100"
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onDelete()
+        }}
+        aria-label={`Delete ${label}`}
+      >
+        <TrashIcon />
+      </button>
+    </div>
+  )
 }
 
-type SidebarSectionProps = {
-  title?: string
+type CollapsibleSectionProps = {
+  title: string
   children: React.ReactNode
   collapsed: boolean
+  open: boolean
+  onToggle: () => void
 }
 
-function SidebarSection({ title, children, collapsed }: SidebarSectionProps) {
+function CollapsibleSection({ title, children, collapsed, open, onToggle }: CollapsibleSectionProps) {
   return (
-    <section className="mb-6">
-      {title ? (
-        <div
-          className={`mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--sidebar-muted)] ${
-            collapsed ? 'px-0 text-center text-transparent' : ''
-          }`}
-        >
-          {collapsed ? (
-            <span className="sr-only">{title}</span>
-          ) : (
-            title
-          )}
-        </div>
-      ) : null}
-      <div className="flex flex-col gap-1.5">{children}</div>
+    <section className="mt-5">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={`flex w-full items-center rounded-lg text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--sidebar-muted)] transition hover:text-[var(--sidebar-text)] ${
+          collapsed ? 'justify-center px-0 py-2' : 'justify-between px-2.5 py-2'
+        }`}
+      >
+        {collapsed ? <span className="sr-only">{title}</span> : <span>{title}</span>}
+        {collapsed ? null : (
+          <span
+            className={`ml-2 flex h-5 w-5 items-center justify-center text-[var(--sidebar-muted)] transition-transform ${
+              open ? 'rotate-0' : '-rotate-90'
+            }`}
+          >
+            <ChevronIcon />
+          </span>
+        )}
+      </button>
+      {open ? <div className={`mt-1 flex flex-col gap-1.5 ${collapsed ? '' : ''}`}>{children}</div> : null}
     </section>
   )
+}
+
+function EmptyState({ collapsed }: { collapsed: boolean }) {
+  if (collapsed) {
+    return <div className="py-1 text-center text-[10px] text-[var(--sidebar-muted)] opacity-70">–</div>
+  }
+  return <div className="px-2.5 py-2 text-[12px] italic text-[var(--sidebar-muted)]">No saved chats yet</div>
 }
 
 function GrowthIcon() {
@@ -288,6 +379,44 @@ function ComposeIcon() {
       <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
       <path d="M9 15l6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       <path d="M9 15h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ChatBubbleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M5 6.5c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2V14c0 1.1-.9 2-2 2h-4.2l-3.8 3.2c-.66.55-1.66.07-1.66-.79V16H7c-1.1 0-2-.9-2-2V6.5Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path d="M8.5 9.5h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M8.5 12.5H13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M9 4h6l.7 1H20v2H4V5h4l1-1Z" fill="currentColor" />
+      <path
+        d="M7 8h10l-.7 10.1a2 2 0 0 1-2 1.9H9.7a2 2 0 0 1-2-1.9L7 8Z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M10.5 10.5v6M13.5 10.5v6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ChevronIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M7 9l5 6 5-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

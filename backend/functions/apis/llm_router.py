@@ -38,8 +38,9 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
     CRITICAL RULES - READ CAREFULLY:
     1. If the query asks for STOCK PRICE, CURRENT PRICE, or REAL-TIME QUOTES → use "web_search" with "financial_api"
     2. If the query asks for NEWS, LATEST UPDATES, or RECENT INFORMATION → use "web_search" with "web_search"  
-    3. If the query asks for ANALYTICAL DATA, SECTOR ANALYSIS, COMPARISONS, or DATABASE QUERIES → use "database_search"
-    4. If the query asks for FACTUAL INFORMATION (CEO, company info, general facts, "who is", "what is") → use "web_search" with "web_search"
+    3. If the query asks for ANALYTICAL DATA or SECTOR ANALYSIS → use "database_search".
+       If the query asks for COMPARISONS (e.g., compare companies over time) → use "web_search" with "financial_api_compare".
+    4. If the query asks for FACTUAL INFORMATION (CEO, company info, general facts, "who is", "what is") → use "web_search" with "factual_llm"  
     5. For stock price queries ONLY, extract the ticker symbol if mentioned
     6. DO NOT use financial_api for factual questions about companies
 
@@ -96,6 +97,21 @@ def route_query_with_llm(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
             record_llm_provider("heuristic")
             return _fallback_heuristic_routing(user_prompt)
         
+        # Post-processing overrides to enforce product behavior
+        intent = str(analysis.get('intent') or '').lower()
+        if intent == 'factual':
+            # Force LLM factual path instead of generic web search
+            analysis['strategy'] = 'web_search'
+            analysis['search_type'] = 'factual_llm'
+        elif intent == 'comparison':
+            # Route comparisons to database (Databricks) for time-series first
+            analysis['strategy'] = 'database_search'
+            analysis['search_type'] = 'database_compare'
+        # If the user explicitly asked for a chart/graph, route to DB chart builder
+        if 'chart' in user_prompt.lower() or 'graph' in user_prompt.lower():
+            analysis['strategy'] = 'database_search'
+            analysis['search_type'] = 'database_chart'
+
         # Ensure strategy is valid
         if analysis['strategy'] not in ['web_search', 'database_search']:
             logger.warning("router.invalid_strategy strategy=%s response=%s", analysis.get('strategy'), analysis)
@@ -146,6 +162,17 @@ def _fallback_heuristic_routing(user_prompt: str) -> Tuple[str, Dict[str, Any]]:
             'search_type': 'financial_api',
             'intent': 'stock_price',
             'confidence': 0.8
+        }
+
+    # Explicit chart request (fetch from DB)
+    if 'chart' in prompt_lower or 'graph' in prompt_lower:
+        logger.info("router.heuristic strategy=database_search intent=chart prompt=%s", safe_prompt)
+        return 'database_search', {
+            'strategy': 'database_search',
+            'reason': 'chart_request',
+            'search_type': 'database_chart',
+            'intent': 'chart',
+            'confidence': 0.75
         }
     
     if any(keyword in prompt_lower for keyword in news_keywords):
