@@ -23,6 +23,11 @@ const computeApiBase = (): string => {
     const currentHost = window.location.hostname
     const isLoopback = (host: string) => host === 'localhost' || host === '127.0.0.1'
 
+    if (isLoopback(resolved.hostname) && currentHost && !isLoopback(currentHost)) {
+      const normalized = `${window.location.origin}${resolved.pathname}`.replace(/\/+$/, '')
+      return ensureApiSuffix(normalized)
+    }
+
     if (currentHost && isLoopback(resolved.hostname) && isLoopback(currentHost) && resolved.hostname !== currentHost) {
       resolved.hostname = currentHost
     }

@@ -9,13 +9,18 @@ from typing import Dict, Optional
 from flask import request, jsonify, make_response
 
 from .chat_sessions_store import delete_all_sessions_for_user
+from .auth_sessions_store import (
+    create_session as create_auth_session,
+    get_user_id as auth_get_user_id,
+    delete_session as delete_auth_session,
+    delete_all_sessions as delete_all_auth_sessions,
+)
 
 
 logger = logging.getLogger("smartwealth.auth")
 
 
-# Simple in-memory session + profile stores (MVP)
-_SESSIONS: Dict[str, "User"] = {}
+# Simple profile store (MVP)
 _PROFILES: Dict[str, dict] = {}
 
 
@@ -61,13 +66,17 @@ def _hardcoded_users() -> Dict[str, User]:
 
 
 _USERS = _hardcoded_users()
+_USERS_BY_ID = {user.id: user for user in _USERS.values()}
 
 
 def _current_user() -> Optional[User]:
     token = request.cookies.get("sw_session")
     if not token:
         return None
-    return _SESSIONS.get(token)
+    user_id = auth_get_user_id(token)
+    if not user_id:
+        return None
+    return _USERS_BY_ID.get(user_id)
 
 
 def login():
@@ -79,7 +88,7 @@ def login():
         return jsonify({"ok": False, "error": "invalid_credentials"}), 401
 
     token = secrets.token_urlsafe(32)
-    _SESSIONS[token] = user
+    create_auth_session(token, user.id)
     resp = make_response(jsonify({"ok": True, "user": _public_user(user)}))
     resp.set_cookie(
         "sw_session",
@@ -95,15 +104,16 @@ def login():
 
 def logout():
     token = request.cookies.get("sw_session")
-    user = _SESSIONS.get(token) if token else None
-    if token and token in _SESSIONS:
-        _SESSIONS.pop(token, None)
+    user = _USERS_BY_ID.get(auth_get_user_id(token)) if token else None
+    if token:
+        delete_auth_session(token)
 
     if user:
         try:
             deleted = delete_all_sessions_for_user(user.id)
             if deleted:
                 logger.info("auth.logout.cleared_sessions user_id=%s count=%s", user.id, deleted)
+            delete_all_auth_sessions(user.id)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("auth.logout.session_cleanup_failed user_id=%s error=%s", user.id, exc)
 
