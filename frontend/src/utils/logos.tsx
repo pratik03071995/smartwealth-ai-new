@@ -2,8 +2,16 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 const CUSTOM_LOGO_URLS: Record<string, string[]> = {
   META: ['https://logo.clearbit.com/meta.com', 'https://logo.clearbit.com/facebook.com'],
-  GOOGL: ['https://logo.clearbit.com/google.com', 'https://logo.clearbit.com/alphabet.com'],
-  GOOG: ['https://logo.clearbit.com/google.com', 'https://logo.clearbit.com/alphabet.com'],
+  GOOGL: [
+    'https://logo.clearbit.com/google.com',
+    'https://logo.clearbit.com/gstatic.com',
+    'https://logo.clearbit.com/abc.xyz',
+  ],
+  GOOG: [
+    'https://logo.clearbit.com/google.com',
+    'https://logo.clearbit.com/gstatic.com',
+    'https://logo.clearbit.com/abc.xyz',
+  ],
   AAPL: ['https://logo.clearbit.com/apple.com'],
   MSFT: ['https://logo.clearbit.com/microsoft.com'],
   AMZN: ['https://logo.clearbit.com/amazon.com'],
@@ -75,12 +83,14 @@ export function CompanyLogo({
   className = '',
   rounded = 'rounded-2xl',
   fallback,
+  plain = false,
 }: {
   symbol?: string | null
   name?: string | null
   className?: string
   rounded?: string
   fallback?: string
+  plain?: boolean
 }) {
   const sources = useMemo(() => buildLogoSources(symbol ?? undefined, name ?? undefined), [symbol, name])
   const [index, setIndex] = useState(0)
@@ -102,16 +112,29 @@ export function CompanyLogo({
   const text = (fallback || symbol || name || '—').slice(0, 2).toUpperCase()
   const current = failed ? undefined : sources[index]
 
+  const baseContainer = plain
+    ? 'flex items-center justify-center overflow-hidden'
+    : 'flex h-full w-full items-center justify-center'
+  const containerClasses = [
+    plain ? '' : 'bg-[var(--panel)]/30',
+    rounded,
+    className,
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  const imageClasses = plain
+    ? 'h-full w-full object-contain'
+    : 'max-h-full max-w-full object-contain p-1'
+
   return (
-    <div
-      className={`flex h-full w-full items-center justify-center bg-[var(--panel)]/30 ${rounded} ${className}`.trim()}
-    >
+    <div className={`${baseContainer} ${containerClasses}`.trim()}>
       {current ? (
         <img
           key={`${symbol || name || 'logo'}-${index}`}
           src={current}
           alt={symbol || name || 'logo'}
-          className="max-h-full max-w-full object-contain p-1"
+          className={imageClasses}
           onError={handleError}
           loading="lazy"
         />

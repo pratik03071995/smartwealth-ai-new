@@ -22,6 +22,19 @@ from .web_search import SEARCH_PROVIDER
 
 NETWORK_POOL = ThreadPoolExecutor(max_workers=4)
 
+COMPANY_TICKER_ALIASES = {
+    'APPLE': 'AAPL',
+    'AMAZON': 'AMZN',
+    'AMAZON.COM': 'AMZN',
+    'GOOGLE': 'GOOGL',
+    'ALPHABET': 'GOOGL',
+    'META': 'META',
+    'FACEBOOK': 'META',
+    'MICROSOFT': 'MSFT',
+    'TESLA': 'TSLA',
+    'NVIDIA': 'NVDA',
+}
+
 
 def _truncate(text: str, limit: int = 180) -> str:
     cleaned = (text or "").replace("\n", " ").strip()
@@ -437,12 +450,21 @@ def _handle_database_query(
                 explicit_window = tag
                 break
         raw_matches = re.findall(r'\b([A-Z]{2,5})\b', user_prompt.upper())
-        STOP = {"SHOW","CHART","FOR","THE","A","AN","PRICE","STOCK","OF"}
+        STOP = {"SHOW","CHART","FOR","THE","A","AN","PRICE","STOCK","OF","ME","PLEASE","DRAW","GIVE","US","YOU","TELL"}
         symbol = None
         for tok in raw_matches:
             if tok not in STOP:
                 symbol = tok
                 break
+
+        if not symbol:
+            lowered = user_prompt.lower()
+            for name, ticker in COMPANY_TICKER_ALIASES.items():
+                if name.lower() in lowered:
+                    symbol = ticker
+                    break
+        elif symbol in COMPANY_TICKER_ALIASES:
+            symbol = COMPANY_TICKER_ALIASES[symbol]
         if not symbol:
             return finalize_response({
                 "reply": "Please specify the ticker to chart (e.g., 'Show 1Y chart for AAPL').",

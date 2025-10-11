@@ -1,5 +1,6 @@
 import React from 'react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import CompanyLogo from '../../utils/logos'
 
 export type StockPoint = { t: string; close: number }
 
@@ -103,8 +104,16 @@ export default function StockLineCard({
     <div className="rounded-3xl border border-[#e1e5ee] bg-white p-4 shadow-[0_18px_36px_rgba(15,23,42,0.08)]">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
-          <div className="text-lg font-semibold capitalize text-[#0f172a]">
-            {headline || `${symbol} price`}
+          <div className="flex items-center gap-2 text-base font-semibold capitalize text-[#0f172a]">
+            <CompanyLogo
+              symbol={symbol}
+              name={symbol}
+              className="h-7 w-7"
+              rounded="rounded-full"
+              fallback={symbol}
+              plain
+            />
+            <span>{headline || `${symbol} price`}</span>
           </div>
           {lastPrice !== null ? (
             <div className="flex flex-wrap items-end gap-3 text-sm">
