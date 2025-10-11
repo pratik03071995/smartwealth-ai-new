@@ -128,6 +128,7 @@ type ChatSessionValue = {
   startNewSession: () => Promise<string | null>
   openSession: (id: string) => Promise<void>
   refreshSessions: () => Promise<number>
+  deleteSession: (id: string) => Promise<boolean>
 }
 
 const ChatSessionContext = createContext<ChatSessionValue | undefined>(undefined)
@@ -362,6 +363,43 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
       return sessionsRef.current.length
     }
   }, [activeSessionId, orderSessions])
+
+  const deleteSession = useCallback(
+    async (sessionId: string): Promise<boolean> => {
+      if (!sessionId) return false
+
+      setSessions((prev) => prev.filter((entry) => entry.id !== sessionId))
+      setSessionMessages((prev) => {
+        const next = { ...prev }
+        delete next[sessionId]
+        return next
+      })
+      delete sessionMessagesRef.current[sessionId]
+
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(null)
+        setMessages([INITIAL_ASSISTANT])
+        setLastChart(null)
+        setStatusLines([])
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/chat/sessions/${sessionId}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        })
+        if (!response.ok) {
+          throw new Error(`Failed to delete chat session (${response.status})`)
+        }
+        return true
+      } catch (error) {
+        console.error('Failed to delete session', error)
+        await refreshSessions()
+        return false
+      }
+    },
+    [activeSessionId, refreshSessions],
+  )
 
   const fetchSessionMessages = useCallback(async (sessionId: string): Promise<Msg[]> => {
     try {
@@ -783,6 +821,7 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
       startNewSession,
       openSession,
       refreshSessions,
+      deleteSession,
     }),
     [
       messages,
@@ -802,6 +841,7 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
       startNewSession,
       openSession,
       refreshSessions,
+      deleteSession,
     ],
   )
 

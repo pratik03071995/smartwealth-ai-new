@@ -21,6 +21,7 @@ type NavItem = {
   disabled?: boolean
   action?: 'new-chat' | 'open-session'
   sessionId?: string
+  onDelete?: () => void
 }
 
 type Section = {
@@ -39,7 +40,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const { sessions, activeSessionId, openSession } = useChatSession()
+  const { sessions, activeSessionId, openSession, deleteSession } = useChatSession()
 
   const FEATURE_SECTION: Section = React.useMemo(() => ({
     title: 'Features',
@@ -64,10 +65,11 @@ export default function Sidebar({
         action: 'open-session',
         sessionId: session.id,
         path: '/',
+        onDelete: () => deleteSession(session.id),
       })),
     ]
     return { title: 'Chats', items }
-  }, [sessions])
+  }, [sessions, deleteSession])
 
   const SECTIONS: Section[] = React.useMemo(() => {
     return [TOP_DASHBOARD, FEATURE_SECTION, CHAT_SECTION].filter(Boolean) as Section[]
@@ -135,6 +137,7 @@ export default function Sidebar({
                   onClick={disabled ? undefined : handleClick}
                   disabled={disabled}
                   collapsed={collapsed}
+                  onDelete={item.onDelete}
                 />
               )
             })}
@@ -218,21 +221,22 @@ type SidebarButtonProps = {
   active?: boolean
   disabled?: boolean
   collapsed?: boolean
+  onDelete?: () => void
 }
 
-function SidebarButton({ label, icon, onClick, active, disabled, collapsed }: SidebarButtonProps) {
+function SidebarButton({ label, icon, onClick, active, disabled, collapsed, onDelete }: SidebarButtonProps) {
   const baseClasses = [
     'group relative flex w-full items-center gap-3 rounded-xl px-3 py-2 text-[13px] font-medium transition-colors',
     active
       ? 'bg-[var(--sidebar-active-bg)] text-[var(--sidebar-accent-text)]'
       : 'text-[var(--sidebar-muted)] hover:bg-[var(--sidebar-hover-bg)] hover:text-[var(--sidebar-text)]',
     disabled ? 'cursor-not-allowed opacity-60' : '',
-    collapsed ? 'justify-center px-1 py-2.5' : '',
+    collapsed ? 'justify-center px-1 py-2.5' : onDelete ? 'pr-12' : '',
   ]
     .filter(Boolean)
     .join(' ')
 
-  return (
+  const mainButton = (
     <button type="button" className={baseClasses} onClick={onClick} disabled={disabled} title={collapsed ? label : undefined}>
       <span
         className={`grid h-9 w-9 place-items-center rounded-xl text-[var(--sidebar-muted)] transition ${
@@ -243,6 +247,28 @@ function SidebarButton({ label, icon, onClick, active, disabled, collapsed }: Si
       </span>
       {collapsed ? null : <span className="flex-1 text-left leading-5">{label}</span>}
     </button>
+  )
+
+  if (!onDelete || collapsed) {
+    return mainButton
+  }
+
+  return (
+    <div className="relative w-full">
+      {mainButton}
+      <button
+        type="button"
+        className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-[#ef4444] opacity-0 transition hover:bg-[#fee2e2] hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100"
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onDelete()
+        }}
+        aria-label={`Delete ${label}`}
+      >
+        <TrashIcon />
+      </button>
+    </div>
   )
 }
 
@@ -324,6 +350,21 @@ function ChatBubbleIcon() {
       />
       <path d="M8.5 9.5h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       <path d="M8.5 12.5H13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M9 4h6l.7 1H20v2H4V5h4l1-1Z" fill="currentColor" />
+      <path
+        d="M7 8h10l-.7 10.1a2 2 0 0 1-2 1.9H9.7a2 2 0 0 1-2-1.9L7 8Z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path d="M10.5 10.5v6M13.5 10.5v6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
     </svg>
   )
 }
