@@ -24,11 +24,6 @@ type NavItem = {
   onDelete?: () => void
 }
 
-type Section = {
-  title?: string
-  items: NavItem[]
-}
-
 export default function Sidebar({
   activePath,
   onNavigate,
@@ -42,24 +37,22 @@ export default function Sidebar({
   const navigate = useNavigate()
   const { sessions, activeSessionId, openSession, deleteSession } = useChatSession()
 
-  const FEATURE_SECTION: Section = React.useMemo(() => ({
-    title: 'Features',
-    items: [
+  const [featuresOpen, setFeaturesOpen] = React.useState(true)
+  const [chatsOpen, setChatsOpen] = React.useState(true)
+
+  const featureItems: NavItem[] = React.useMemo(
+    () => [
       { label: 'Earnings Calendar', icon: <CalendarIcon />, path: '/earnings' },
       { label: 'Smart Scorecards', icon: <ClipboardIcon />, path: '/score' },
       { label: 'Vendor Network', icon: <BriefcaseIcon />, path: '/vendors' },
       { label: 'Company Info', icon: <BuildingIcon />, path: '/company-info' },
     ],
-  }), [])
+    [],
+  )
 
-  const TOP_DASHBOARD: Section | null = React.useMemo(() => (
-    user ? { items: [{ label: 'Dashboard', icon: <HomeIcon />, path: '/dashboard' }] } : null
-  ), [user])
-
-  const CHAT_SECTION: Section = React.useMemo(() => {
-    const items: NavItem[] = [
-      { label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' },
-      ...sessions.map<NavItem>((session) => ({
+  const chatItems: NavItem[] = React.useMemo(
+    () =>
+      sessions.map<NavItem>((session) => ({
         label: session.title || 'New chat',
         icon: <ChatBubbleIcon />,
         action: 'open-session',
@@ -67,13 +60,65 @@ export default function Sidebar({
         path: '/',
         onDelete: () => deleteSession(session.id),
       })),
-    ]
-    return { title: 'Chats', items }
-  }, [sessions, deleteSession])
+    [sessions, deleteSession],
+  )
 
-  const SECTIONS: Section[] = React.useMemo(() => {
-    return [TOP_DASHBOARD, FEATURE_SECTION, CHAT_SECTION].filter(Boolean) as Section[]
-  }, [TOP_DASHBOARD, FEATURE_SECTION, CHAT_SECTION])
+  const renderNavItem = React.useCallback(
+    (item: NavItem) => {
+      const isActive = item.sessionId
+        ? item.sessionId === activeSessionId
+        : item.action === 'new-chat'
+          ? !activeSessionId && activePath === '/'
+          : item.path
+            ? (item.path === '/' ? activePath === item.path : activePath.startsWith(item.path))
+            : false
+
+      const disabled = item.disabled && !item.path
+
+      const handleClick = () => {
+        if (item.action === 'new-chat') {
+          onNewChat()
+          onOpenChange(false)
+          return
+        }
+        if (item.action === 'open-session' && item.sessionId) {
+          openSession(item.sessionId)
+            .then(() => {
+              onNavigate('/')
+              onOpenChange(false)
+            })
+            .catch((error) => console.error('Failed to open session', error))
+          return
+        }
+        if (item.path) {
+          onNavigate(item.path)
+          onOpenChange(false)
+        }
+      }
+
+      return (
+        <SidebarButton
+          key={item.sessionId ?? item.label}
+          label={item.label}
+          icon={item.icon}
+          active={isActive}
+          onClick={disabled ? undefined : handleClick}
+          disabled={disabled}
+          collapsed={collapsed}
+          onDelete={item.onDelete}
+        />
+      )
+    },
+    [
+      activePath,
+      activeSessionId,
+      collapsed,
+      onNavigate,
+      onNewChat,
+      onOpenChange,
+      openSession,
+    ],
+  )
 
   const content = (
     <aside
@@ -103,46 +148,30 @@ export default function Sidebar({
       </div>
 
       <nav className={`flex-1 overflow-y-auto ${collapsed ? 'px-1.5' : 'px-2.5'} pb-6`}> 
-        {SECTIONS.map((section, index) => (
-          <SidebarSection key={section.title ?? index} title={section.title} collapsed={collapsed}>
-            {section.items.map((item) => {
-              const isActive = item.sessionId
-                ? item.sessionId === activeSessionId
-                : !!item.path && activePath.startsWith(item.path)
-              const handleClick = () => {
-                if (item.action === 'new-chat') {
-                  onNewChat()
-                  return
-                }
-                if (item.action === 'open-session' && item.sessionId) {
-                  openSession(item.sessionId)
-                    .then(() => {
-                      onNavigate('/')
-                      onOpenChange(false)
-                    })
-                    .catch((error) => {
-                      console.error('Failed to open session', error)
-                    })
-                  return
-                }
-                if (item.path) onNavigate(item.path)
-              }
-              const disabled = item.disabled && !item.path
-              return (
-                <SidebarButton
-                  key={item.sessionId ?? item.label}
-                  label={item.label}
-                  icon={item.icon}
-                  active={isActive}
-                  onClick={disabled ? undefined : handleClick}
-                  disabled={disabled}
-                  collapsed={collapsed}
-                  onDelete={item.onDelete}
-                />
-              )
-            })}
-          </SidebarSection>
-        ))}
+        {user ? renderNavItem({ label: 'Dashboard', icon: <HomeIcon />, path: '/dashboard' }) : null}
+        {renderNavItem({ label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' })}
+
+        <CollapsibleSection
+          title="Features"
+          collapsed={collapsed}
+          open={featuresOpen}
+          onToggle={() => setFeaturesOpen((prev) => !prev)}
+        >
+          {featuresOpen ? featureItems.map(renderNavItem) : null}
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          title="Chats"
+          collapsed={collapsed}
+          open={chatsOpen}
+          onToggle={() => setChatsOpen((prev) => !prev)}
+        >
+          {chatsOpen && chatItems.length > 0
+            ? chatItems.map(renderNavItem)
+            : chatsOpen
+              ? <EmptyState collapsed={collapsed} />
+              : null}
+        </CollapsibleSection>
       </nav>
 
       <div className="mt-auto" />
@@ -272,31 +301,46 @@ function SidebarButton({ label, icon, onClick, active, disabled, collapsed, onDe
   )
 }
 
-type SidebarSectionProps = {
-  title?: string
+type CollapsibleSectionProps = {
+  title: string
   children: React.ReactNode
   collapsed: boolean
+  open: boolean
+  onToggle: () => void
 }
 
-function SidebarSection({ title, children, collapsed }: SidebarSectionProps) {
+function CollapsibleSection({ title, children, collapsed, open, onToggle }: CollapsibleSectionProps) {
   return (
-    <section className="mb-6">
-      {title ? (
-        <div
-          className={`mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--sidebar-muted)] ${
-            collapsed ? 'px-0 text-center text-transparent' : ''
-          }`}
-        >
-          {collapsed ? (
-            <span className="sr-only">{title}</span>
-          ) : (
-            title
-          )}
-        </div>
-      ) : null}
-      <div className="flex flex-col gap-1.5">{children}</div>
+    <section className="mt-5">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={`flex w-full items-center rounded-lg text-[11px] font-semibold uppercase tracking-[0.24em] text-[var(--sidebar-muted)] transition hover:text-[var(--sidebar-text)] ${
+          collapsed ? 'justify-center px-0 py-2' : 'justify-between px-2.5 py-2'
+        }`}
+      >
+        {collapsed ? <span className="sr-only">{title}</span> : <span>{title}</span>}
+        {collapsed ? null : (
+          <span
+            className={`ml-2 flex h-5 w-5 items-center justify-center text-[var(--sidebar-muted)] transition-transform ${
+              open ? 'rotate-0' : '-rotate-90'
+            }`}
+          >
+            <ChevronIcon />
+          </span>
+        )}
+      </button>
+      {open ? <div className={`mt-1 flex flex-col gap-1.5 ${collapsed ? '' : ''}`}>{children}</div> : null}
     </section>
   )
+}
+
+function EmptyState({ collapsed }: { collapsed: boolean }) {
+  if (collapsed) {
+    return <div className="py-1 text-center text-[10px] text-[var(--sidebar-muted)] opacity-70">–</div>
+  }
+  return <div className="px-2.5 py-2 text-[12px] italic text-[var(--sidebar-muted)]">No saved chats yet</div>
 }
 
 function GrowthIcon() {
@@ -365,6 +409,14 @@ function TrashIcon() {
         strokeLinejoin="round"
       />
       <path d="M10.5 10.5v6M13.5 10.5v6" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ChevronIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M7 9l5 6 5-6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
