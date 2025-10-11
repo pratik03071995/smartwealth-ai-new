@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import os
 import secrets
+import logging
 from dataclasses import dataclass, asdict
 from typing import Dict, Optional
 
 from flask import request, jsonify, make_response
+
+from .chat_sessions_store import delete_all_sessions_for_user
+
+
+logger = logging.getLogger("smartwealth.auth")
 
 
 # Simple in-memory session + profile stores (MVP)
@@ -89,8 +95,18 @@ def login():
 
 def logout():
     token = request.cookies.get("sw_session")
+    user = _SESSIONS.get(token) if token else None
     if token and token in _SESSIONS:
         _SESSIONS.pop(token, None)
+
+    if user:
+        try:
+            deleted = delete_all_sessions_for_user(user.id)
+            if deleted:
+                logger.info("auth.logout.cleared_sessions user_id=%s count=%s", user.id, deleted)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("auth.logout.session_cleanup_failed user_id=%s error=%s", user.id, exc)
+
     resp = make_response(jsonify({"ok": True}))
     resp.delete_cookie("sw_session", path="/")
     return resp

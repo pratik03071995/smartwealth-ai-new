@@ -1,6 +1,7 @@
 import React from 'react'
 import { useAuth } from '../auth/AuthProvider'
 import { useNavigate } from 'react-router-dom'
+import { useChatSession } from '../components/chat/ChatSessionProvider'
 
 type SidebarProps = {
   activePath: string
@@ -18,20 +19,13 @@ type NavItem = {
   path?: string
   badge?: string
   disabled?: boolean
-  action?: 'new-chat'
+  action?: 'new-chat' | 'open-session'
+  sessionId?: string
 }
 
 type Section = {
   title?: string
   items: NavItem[]
-}
-
-// removed QUICK_ACTIONS; new chat now lives under the Chats section
-
-// This section now only contains a single entry: New chat
-const CHAT_SECTION_BASE: Section = {
-  title: 'Chats',
-  items: [{ label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' }],
 }
 
 export default function Sidebar({
@@ -45,6 +39,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const { sessions, activeSessionId, openSession } = useChatSession()
 
   const FEATURE_SECTION: Section = React.useMemo(() => ({
     title: 'Features',
@@ -60,10 +55,23 @@ export default function Sidebar({
     user ? { items: [{ label: 'Dashboard', icon: <HomeIcon />, path: '/dashboard' }] } : null
   ), [user])
 
+  const CHAT_SECTION: Section = React.useMemo(() => {
+    const items: NavItem[] = [
+      { label: 'New chat', icon: <ComposeIcon />, action: 'new-chat' },
+      ...sessions.map<NavItem>((session) => ({
+        label: session.title || 'New chat',
+        icon: <ChatBubbleIcon />,
+        action: 'open-session',
+        sessionId: session.id,
+        path: '/',
+      })),
+    ]
+    return { title: 'Chats', items }
+  }, [sessions])
+
   const SECTIONS: Section[] = React.useMemo(() => {
-    const chats = CHAT_SECTION_BASE
-    return [TOP_DASHBOARD, FEATURE_SECTION, chats].filter(Boolean) as Section[]
-  }, [TOP_DASHBOARD, FEATURE_SECTION])
+    return [TOP_DASHBOARD, FEATURE_SECTION, CHAT_SECTION].filter(Boolean) as Section[]
+  }, [TOP_DASHBOARD, FEATURE_SECTION, CHAT_SECTION])
 
   const content = (
     <aside
@@ -96,10 +104,23 @@ export default function Sidebar({
         {SECTIONS.map((section, index) => (
           <SidebarSection key={section.title ?? index} title={section.title} collapsed={collapsed}>
             {section.items.map((item) => {
-              const isActive = !!item.path && activePath.startsWith(item.path)
+              const isActive = item.sessionId
+                ? item.sessionId === activeSessionId
+                : !!item.path && activePath.startsWith(item.path)
               const handleClick = () => {
                 if (item.action === 'new-chat') {
                   onNewChat()
+                  return
+                }
+                if (item.action === 'open-session' && item.sessionId) {
+                  openSession(item.sessionId)
+                    .then(() => {
+                      onNavigate('/')
+                      onOpenChange(false)
+                    })
+                    .catch((error) => {
+                      console.error('Failed to open session', error)
+                    })
                   return
                 }
                 if (item.path) onNavigate(item.path)
@@ -107,7 +128,7 @@ export default function Sidebar({
               const disabled = item.disabled && !item.path
               return (
                 <SidebarButton
-                  key={item.label}
+                  key={item.sessionId ?? item.label}
                   label={item.label}
                   icon={item.icon}
                   active={isActive}
@@ -288,6 +309,21 @@ function ComposeIcon() {
       <rect x="3.5" y="3.5" width="17" height="17" rx="4" stroke="currentColor" strokeWidth="1.4" />
       <path d="M9 15l6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       <path d="M9 15h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ChatBubbleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M5 6.5c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2V14c0 1.1-.9 2-2 2h-4.2l-3.8 3.2c-.66.55-1.66.07-1.66-.79V16H7c-1.1 0-2-.9-2-2V6.5Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path d="M8.5 9.5h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M8.5 12.5H13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   )
 }

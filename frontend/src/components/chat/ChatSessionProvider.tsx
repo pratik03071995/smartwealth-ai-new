@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import { apiBase } from '../../services/api'
+import { useAuth } from '../../auth/AuthProvider'
 
 const API_BASE = apiBase
 
@@ -76,6 +77,16 @@ export type Msg = AssistantMsg | UserMsg
 
 export const isAssistant = (msg: Msg): msg is AssistantMsg => msg.role === 'assistant'
 
+export type ChatSessionSummary = {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  lastUsedAt: string
+  firstPrompt?: string | null
+  lastPrompt?: string | null
+}
+
 const INITIAL_ASSISTANT: AssistantMsg = {
   role: 'assistant',
   text: 'Hi! Ask me about company fundamentals, earnings, scores, or vendor relationships. Try “Where is Meta headquartered?” or “Who are Nvidia’s customers?”.',
@@ -112,6 +123,11 @@ type ChatSessionValue = {
   clearConversation: () => void
   updateMessages: React.Dispatch<React.SetStateAction<Msg[]>>
   lastChart: ChartPayload | null
+  sessions: ChatSessionSummary[]
+  activeSessionId: string | null
+  startNewSession: () => Promise<string | null>
+  openSession: (id: string) => Promise<void>
+  refreshSessions: () => Promise<number>
 }
 
 const ChatSessionContext = createContext<ChatSessionValue | undefined>(undefined)
@@ -125,6 +141,7 @@ export function useChatSession() {
 }
 
 export function ChatSessionProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
   const [messages, setMessages] = useState<Msg[]>([INITIAL_ASSISTANT])
   const [isLoading, setIsLoading] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
@@ -134,10 +151,23 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
   const [systemStatus, setSystemStatus] = useState<SystemStatus>('checking')
   const [healthSnapshot, setHealthSnapshot] = useState<HealthSnapshot | null>(null)
   const [isHealthRefreshing, setIsHealthRefreshing] = useState(false)
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([])
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [sessionMessages, setSessionMessages] = useState<Record<string, Msg[]>>({})
 
   const pendingTimerRef = useRef<number | null>(null)
   const pendingStartRef = useRef<number | null>(null)
   const sendGuardRef = useRef(false)
+  const sessionMessagesRef = useRef<Record<string, Msg[]>>({})
+  const sessionsRef = useRef<ChatSessionSummary[]>([])
+
+  const orderSessions = useCallback((entries: ChatSessionSummary[]) => {
+    return [...entries].sort((a, b) => {
+      const tsA = Date.parse(a.lastUsedAt || a.updatedAt || a.createdAt || '') || 0
+      const tsB = Date.parse(b.lastUsedAt || b.updatedAt || b.createdAt || '') || 0
+      return tsB - tsA
+    })
+  }, [])
 
   const clearPendingTimer = useCallback(() => {
     if (pendingTimerRef.current) {
@@ -147,6 +177,27 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
     pendingStartRef.current = null
     setPendingLatencyMs(0)
   }, [])
+
+  useEffect(() => {
+    sessionMessagesRef.current = sessionMessages
+  }, [sessionMessages])
+
+  useEffect(() => {
+    sessionsRef.current = sessions
+  }, [sessions])
+
+  useEffect(() => {
+    if (user) return
+    setSessions([])
+    setActiveSessionId(null)
+    setSessionMessages({})
+    sessionMessagesRef.current = {}
+    sessionsRef.current = []
+    setMessages([INITIAL_ASSISTANT])
+    setLastChart(null)
+    setStatusLines([])
+    sendGuardRef.current = false
+  }, [user])
 
   useEffect(() => {
     const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
@@ -165,6 +216,15 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
     return () => clearPendingTimer()
   }, [isLoading, clearPendingTimer])
 
+  useEffect(() => {
+    if (!activeSessionId) return
+    setSessionMessages((prev) => {
+      const current = prev[activeSessionId]
+      if (current === messages) return prev
+      return { ...prev, [activeSessionId]: messages }
+    })
+  }, [messages, activeSessionId])
+
   const refreshHealth = useCallback(
     async (options: RefreshOptions = {}): Promise<SystemStatus> => {
       const { force = false, silent = false } = options
@@ -177,6 +237,7 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
         const query = force ? '?refresh=1' : ''
         const response = await fetch(`${API_BASE}/health${query}`, {
           headers: { Accept: 'application/json' },
+          credentials: 'include',
         })
         if (!response.ok) {
           throw new Error(`Health check failed (${response.status})`)
@@ -238,6 +299,176 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
     })
   }, [])
 
+  const startNewSession = useCallback(async (): Promise<string | null> => {
+    try {
+      const response = await fetch(`${API_BASE}/chat/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to create chat session (${response.status})`)
+      }
+      const data = await response.json()
+      const record = (data?.session || null) as ChatSessionSummary | null
+      if (!record) {
+        throw new Error('Invalid session payload')
+      }
+      setSessions((prev) => orderSessions([record, ...prev.filter((item) => item.id !== record.id)]))
+      setActiveSessionId(record.id)
+      setSessionMessages((prev) => ({ ...prev, [record.id]: [INITIAL_ASSISTANT] }))
+      setMessages([INITIAL_ASSISTANT])
+      setLastChart(null)
+      setStatusLines([])
+      return record.id
+    } catch (error) {
+      console.error('Failed to start new session', error)
+      setMessages([INITIAL_ASSISTANT])
+      setLastChart(null)
+      setStatusLines([])
+      return null
+    }
+  }, [orderSessions])
+
+  const refreshSessions = useCallback(async (): Promise<number> => {
+    try {
+      const response = await fetch(`${API_BASE}/chat/sessions`, {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to load sessions (${response.status})`)
+      }
+      const payload = await response.json()
+      if (!payload?.ok || !Array.isArray(payload.sessions)) {
+        setSessions([])
+        setActiveSessionId(null)
+        return 0
+      }
+      const list = orderSessions(payload.sessions as ChatSessionSummary[])
+      setSessions(list)
+      if (!list.length) {
+        setActiveSessionId(null)
+        return 0
+      }
+      const preferred = activeSessionId && list.some((entry) => entry.id === activeSessionId) ? activeSessionId : list[0].id
+      setActiveSessionId(preferred)
+      if (preferred && !sessionMessagesRef.current[preferred]) {
+        setSessionMessages((prev) => ({ ...prev, [preferred]: prev[preferred] ?? [INITIAL_ASSISTANT] }))
+      }
+      return list.length
+    } catch (error) {
+      console.error('Failed to refresh sessions', error)
+      return sessionsRef.current.length
+    }
+  }, [activeSessionId, orderSessions])
+
+  const fetchSessionMessages = useCallback(async (sessionId: string): Promise<Msg[]> => {
+    try {
+      const response = await fetch(`${API_BASE}/chat/sessions/${sessionId}/messages`, {
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to load session messages (${response.status})`)
+      }
+      const payload = await response.json()
+      if (!payload?.ok || !Array.isArray(payload.messages)) {
+        return [INITIAL_ASSISTANT]
+      }
+      const converted: Msg[] = []
+      for (const raw of payload.messages as any[]) {
+        const text = typeof raw?.text === 'string' ? raw.text : ''
+        if (!text) continue
+        const role = typeof raw?.role === 'string' ? raw.role.toLowerCase() : 'user'
+        if (role === 'assistant') {
+          converted.push({
+            role: 'assistant',
+            id: createMessageId(),
+            text,
+            table: undefined,
+            chart: null,
+            sql: null,
+            latencyMs: undefined,
+            feedback: null,
+            plan: null,
+            followups: null,
+            tablePreview: null,
+            prompt: undefined,
+            sourceLabel: null,
+            dataSource: null,
+            llmSource: null,
+            llmSourceRaw: null,
+            searchProvider: null,
+          })
+        } else {
+          converted.push({ role: 'user', text })
+        }
+      }
+      return [INITIAL_ASSISTANT, ...converted]
+    } catch (error) {
+      console.error('Failed to load session messages', error)
+      return [INITIAL_ASSISTANT]
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!activeSessionId) return
+    let cancelled = false
+    const loadHistory = async () => {
+      const existing = sessionMessagesRef.current[activeSessionId]
+      if (existing) {
+        setMessages(existing)
+        setLastChart(null)
+        setStatusLines([])
+        return
+      }
+      const history = await fetchSessionMessages(activeSessionId)
+      if (cancelled) return
+      setSessionMessages((prev) => ({ ...prev, [activeSessionId]: history }))
+      setMessages(history)
+      setLastChart(null)
+      setStatusLines([])
+    }
+    loadHistory()
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionId, fetchSessionMessages])
+
+  const openSession = useCallback(
+    async (sessionId: string) => {
+      if (!sessionId) return
+      setActiveSessionId(sessionId)
+      setSessions((prev) => {
+        const match = prev.find((entry) => entry.id === sessionId)
+        if (!match) return prev
+        const nowIso = new Date().toISOString()
+        const updated: ChatSessionSummary = { ...match, lastUsedAt: nowIso, updatedAt: nowIso }
+        return orderSessions([updated, ...prev.filter((entry) => entry.id !== sessionId)])
+      })
+      let history = sessionMessagesRef.current[sessionId]
+      if (!history) {
+        history = await fetchSessionMessages(sessionId)
+        setSessionMessages((prev) => ({ ...prev, [sessionId]: history }))
+      }
+      setMessages(history)
+      setLastChart(null)
+      setStatusLines([])
+      try {
+        await fetch(`${API_BASE}/chat/sessions/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lastUsedAt: new Date().toISOString() }),
+          credentials: 'include',
+        })
+      } catch (error) {
+        console.debug('Failed to touch session timestamp', error)
+      }
+    },
+    [orderSessions, fetchSessionMessages],
+  )
+
   const sendMessage = useCallback(
     async (rawText: string) => {
       const text = rawText.trim()
@@ -250,6 +481,14 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
         if (status === 'unavailable') {
           ensurePreparationNotice()
           return
+        }
+
+        let sessionId = activeSessionId
+        if (!sessionId) {
+          sessionId = await startNewSession()
+          if (!sessionId) {
+            return
+          }
         }
 
         setIsLoading(true)
@@ -276,6 +515,13 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
         }
 
         setMessages((prev) => [...prev, { role: 'user', text }, placeholder])
+        setSessions((prev) => {
+          const existing = prev.find((entry) => entry.id === sessionId)
+          if (!existing) return prev
+          const nowIso = new Date().toISOString()
+          const updated: ChatSessionSummary = { ...existing, lastUsedAt: nowIso, updatedAt: nowIso }
+          return orderSessions([updated, ...prev.filter((entry) => entry.id !== sessionId)])
+        })
 
         const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
 
@@ -285,7 +531,8 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
           },
-          body: JSON.stringify({ message: text }),
+          body: JSON.stringify({ message: text, sessionId }),
+          credentials: 'include',
         })
 
         if (!response.ok || !response.body) {
@@ -362,6 +609,34 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
                   ? data.reply
                   : streamingText || 'I could not craft a response for that.'
 
+              const sessionTitle = typeof data.sessionTitle === 'string' ? data.sessionTitle.trim() : null
+              const sessionPayloadId = (data.sessionId as string | undefined) || sessionId
+              const sessionLastUsedAt = typeof data.sessionLastUsedAt === 'string' ? data.sessionLastUsedAt : new Date().toISOString()
+              if (sessionPayloadId) {
+                setSessions((prev) => {
+                  const others = prev.filter((entry) => entry.id !== sessionPayloadId)
+                  const existing = prev.find((entry) => entry.id === sessionPayloadId)
+                  const base: ChatSessionSummary = existing ?? {
+                    id: sessionPayloadId,
+                    title: sessionTitle || 'New chat',
+                    createdAt: sessionLastUsedAt,
+                    updatedAt: sessionLastUsedAt,
+                    lastUsedAt: sessionLastUsedAt,
+                    firstPrompt: text,
+                    lastPrompt: text,
+                  }
+                  const merged: ChatSessionSummary = {
+                    ...base,
+                    title: sessionTitle && sessionTitle.length ? sessionTitle : base.title,
+                    lastPrompt: text,
+                    lastUsedAt: sessionLastUsedAt,
+                    updatedAt: sessionLastUsedAt,
+                  }
+                  return orderSessions([merged, ...others])
+                })
+                setActiveSessionId(sessionPayloadId)
+              }
+
               setMessages((prev) =>
                 prev.map((entry) =>
                   isAssistant(entry) && entry.id === assistantId
@@ -419,15 +694,44 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
       } finally {
         setIsLoading(false)
         setIsStreaming(false)
-        sendGuardRef.current = false
+      sendGuardRef.current = false
       }
     },
-    [ensurePreparationNotice, refreshHealth],
+    [
+      activeSessionId,
+      ensurePreparationNotice,
+      refreshHealth,
+      orderSessions,
+      startNewSession,
+    ],
   )
 
   const clearConversation = useCallback(() => {
-    setMessages([INITIAL_ASSISTANT])
-  }, [])
+    if (activeSessionId) {
+      const initial = [INITIAL_ASSISTANT]
+      setMessages(initial)
+      setSessionMessages((prev) => ({ ...prev, [activeSessionId]: initial }))
+    } else {
+      setMessages([INITIAL_ASSISTANT])
+    }
+    setLastChart(null)
+    setStatusLines([])
+  }, [activeSessionId])
+
+  useEffect(() => {
+    let mounted = true
+    const init = async () => {
+      const count = await refreshSessions()
+      if (!mounted) return
+      if (count === 0) {
+        await startNewSession()
+      }
+    }
+    init()
+    return () => {
+      mounted = false
+    }
+  }, [refreshSessions, startNewSession])
 
   useEffect(() => {
     refreshHealth({ force: true })
@@ -474,6 +778,11 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
       clearConversation,
       updateMessages: setMessages,
       lastChart,
+      sessions,
+      activeSessionId,
+      startNewSession,
+      openSession,
+      refreshSessions,
     }),
     [
       messages,
@@ -488,6 +797,11 @@ export function ChatSessionProvider({ children }: { children: React.ReactNode })
       sendMessage,
       clearConversation,
       lastChart,
+      sessions,
+      activeSessionId,
+      startNewSession,
+      openSession,
+      refreshSessions,
     ],
   )
 

@@ -9,7 +9,8 @@ from .chat import (
     _summarize_answer, _render_sql_with_params, _build_table_payload,
     _build_chart_payload, _prepare_preview_rows, _generate_followups,
     logger, CHAT_FEEDBACK_STATUS_PENDING, reset_llm_provider,
-    get_llm_source_label, get_last_llm_provider, build_source_label
+    get_llm_source_label, get_last_llm_provider, build_source_label,
+    _llm_chat,
 )
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -18,6 +19,8 @@ from threading import Thread
 
 from .feedback import log_chat_interaction
 from .web_search import SEARCH_PROVIDER
+from .auth import _current_user
+from .chat_sessions_store import get_session, record_interaction
 
 
 NETWORK_POOL = ThreadPoolExecutor(max_workers=4)
@@ -34,6 +37,39 @@ COMPANY_TICKER_ALIASES = {
     'TESLA': 'TSLA',
     'NVIDIA': 'NVDA',
 }
+
+
+def _generate_session_title(user_prompt: str, assistant_reply: Optional[str]) -> str:
+    base = (user_prompt or '').strip()
+    if not base and assistant_reply:
+        base = assistant_reply.strip()
+    if not base:
+        return 'New chat'
+
+    prompt = (
+        "You create concise chat titles. Summarize the following user request into a short, 3-6 word title."
+        " Do not use quotation marks or punctuation at the end."
+        " Respond with title text only.\n\n"
+        f"Request: {base}"
+    )
+
+    try:
+        title = _llm_chat(
+            [
+                {"role": "system", "content": "You provide brief chat titles."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=18,
+        )
+        cleaned = (title or '').strip().strip('"').strip("'")
+        first_line = cleaned.splitlines()[0].strip()
+        if first_line:
+            return first_line[:80]
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.info("chat.session.title_llm_failed error=%s", exc)
+
+    return base[:80]
 
 
 def _truncate(text: str, limit: int = 180) -> str:
@@ -104,6 +140,8 @@ def handle_chat_clean(
     user_prompt: str,
     *,
     stream_handler: Optional[Callable[[str], None]] = None,
+    session_id: Optional[str] = None,
+    user: Optional[Any] = None,
 ) -> dict[str, Any]:
     """
     Handle chat with clear routing: Database vs Web Search.
@@ -141,16 +179,44 @@ def handle_chat_clean(
         )
 
         if strategy == 'web_search':
-            return _handle_web_search_query(
+            result = _handle_web_search_query(
                 user_prompt, analysis, request_id, stream_handler=stream_handler
             )
-        _status("Fetching data from database…")
-        return _handle_database_query(
-            user_prompt, analysis, request_id, stream_handler=stream_handler
-        )
+        else:
+            _status("Fetching data from database…")
+            result = _handle_database_query(
+                user_prompt, analysis, request_id, stream_handler=stream_handler
+            )
     except Exception as exc:
         logger.exception("chat.request.failed id=%s error=%s", request_id, exc)
         raise
+    else:
+        if user and session_id:
+            try:
+                metadata = record_interaction(
+                    user_id=getattr(user, 'id', None) or getattr(user, 'user_id', None),
+                    session_id=session_id,
+                    user_prompt=user_prompt,
+                    assistant_reply=result.get('reply'),
+                    title_generator=_generate_session_title,
+                )
+                if metadata:
+                    metadata.pop('messages', None)
+                    result['sessionId'] = metadata.get('id', session_id)
+                    if metadata.get('title'):
+                        result['sessionTitle'] = metadata['title']
+                    if metadata.get('lastUsedAt'):
+                        result['sessionLastUsedAt'] = metadata['lastUsedAt']
+            except Exception as session_exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "chat.session.record_failed session_id=%s error=%s",
+                    session_id,
+                    session_exc,
+                )
+        elif session_id:
+            result['sessionId'] = session_id
+
+        return result
 
 def _handle_web_search_query(
     user_prompt: str,
@@ -578,18 +644,31 @@ def _handle_database_query(
 def chat():
     """Chat endpoint using clean routing."""
     from flask import request, jsonify
-    
+
     try:
         data = request.get_json()
         if not data or "message" not in data:
             return jsonify({"error": "Message is required"}), 400
-        
+
         user_message = data["message"]
+        raw_session = data.get("sessionId")
+        if isinstance(raw_session, str):
+            raw_session = raw_session.strip() or None
+        session_id = raw_session or None
+        user = _current_user()
+        if not user:
+            return jsonify({"error": "unauthorized"}), 401
+
+        if session_id:
+            session = get_session(session_id, user.id)
+            if not session:
+                return jsonify({"error": "session_not_found"}), 404
+
         logger.info(
             "chat.endpoint.received ip=%s body_keys=%s", request.remote_addr, list(data.keys())
         )
-        result = handle_chat_clean(user_message)
-        
+        result = handle_chat_clean(user_message, session_id=session_id, user=user)
+
         return jsonify(result)
     except Exception as exc:
         logger.exception("chat.endpoint.failed error=%s", exc)
@@ -601,8 +680,20 @@ def chat_stream():
 
     data = request.get_json(silent=True) or {}
     user_message = data.get("message")
+    raw_session = data.get("sessionId")
+    if isinstance(raw_session, str):
+        raw_session = raw_session.strip() or None
+    session_id = raw_session or None
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "unauthorized"}), 401
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
+
+    if session_id:
+        session = get_session(session_id, user.id)
+        if not session:
+            return jsonify({"error": "session_not_found"}), 404
 
     queue: "Queue[tuple[str, Any]]" = Queue()
     sentinel = object()
@@ -612,7 +703,12 @@ def chat_stream():
 
     def worker() -> None:
         try:
-            result = handle_chat_clean(user_message, stream_handler=stream_callback)
+            result = handle_chat_clean(
+                user_message,
+                stream_handler=stream_callback,
+                session_id=session_id,
+                user=user,
+            )
             queue.put(("result", result))
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("chat.stream.worker_failed error=%s", exc)
