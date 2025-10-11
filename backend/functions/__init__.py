@@ -18,6 +18,7 @@ from .apis.chat_clean import (
     chat as chat_clean,
     chat_stream,
 )
+from .apis.charts import stock_chart
 from .apis.auth import (
     login as auth_login,
     logout as auth_logout,
@@ -31,6 +32,7 @@ __all__ = [
     "chat_clean",
     "chat_feedback",
     "chat_stream",
+    "stock_chart",
     "earnings_week",
     "earnings_all",
     "earnings",

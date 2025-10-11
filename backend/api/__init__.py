@@ -20,6 +20,7 @@ from functions import (
     auth_me,
     portfolio_save,
     portfolio_get,
+    stock_chart,
 )
 
 bp = Blueprint("api", __name__)
@@ -28,6 +29,7 @@ bp.add_url_rule("/api/health", view_func=health, methods=["GET"])
 bp.add_url_rule("/api/chat", view_func=chat_clean, methods=["POST"])
 bp.add_url_rule("/api/chat/stream", view_func=chat_stream, methods=["POST"])
 bp.add_url_rule("/api/chat/feedback", view_func=chat_feedback, methods=["POST"])
+bp.add_url_rule("/api/charts/stock", view_func=stock_chart, methods=["GET"])
 
 bp.add_url_rule("/api/earnings/week", view_func=earnings_week, methods=["GET"])
 bp.add_url_rule("/api/earnings/all", view_func=earnings_all, methods=["GET"])

@@ -15,6 +15,7 @@ import {
   Line,
 } from 'recharts'
 import StockLineCard from './charts/StockLineCard'
+import { buildApiUrl } from '../services/api'
 
 import {
   AssistantMsg,
@@ -186,7 +187,6 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     isStreaming,
     pendingLatencyMs,
     statusLines,
-    lastChart,
     systemStatus,
     healthSnapshot,
     isHealthRefreshing,
@@ -204,21 +204,9 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
   const endRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [glowPulse, setGlowPulse] = useState(false)
-  const [chartUpdateTrigger, setChartUpdateTrigger] = useState(0)
-  // Global fallback: if context didn’t propagate, read the window-exposed chart
-  const [globalChart, setGlobalChart] = useState<any>(null)
+  const chartWindowSelections = useRef<Map<string, DisplayWindow>>(new Map())
   useEffect(() => {
     try { (window as any).__SW_CHAT_RENDERED__ = true } catch {}
-    try {
-      const w = window as any
-      if (w.__SW_LAST_CHART__) setGlobalChart(w.__SW_LAST_CHART__)
-      if (w.SW_LAST_CHART) setGlobalChart(w.SW_LAST_CHART)
-      const id = window.setInterval(() => {
-        if (w.__SW_LAST_CHART__) setGlobalChart(w.__SW_LAST_CHART__)
-        else if (w.SW_LAST_CHART) setGlobalChart(w.SW_LAST_CHART)
-      }, 800)
-      return () => window.clearInterval(id)
-    } catch {}
   }, [])
   const prevStreamingRef = useRef(isStreaming)
   const { play: playChime, muted: chimeMuted, toggleMute: toggleChimeMute } = useChatChime()
@@ -581,67 +569,127 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     )
   }
 
-  function InlineLineChart({ spec, updateTrigger }: { spec: Extract<ChartPayload, { type: 'line' }>, updateTrigger?: number }) {
-    // Use the current window from the spec, but also check the window object for updates
-    const currentChart = (window as any).__SW_LAST_CHART__ || spec
-    const selWindow = currentChart.window || '1Y'
-    const windows = currentChart.availableWindows && currentChart.availableWindows.length
-      ? currentChart.availableWindows
-      : ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y']
-    const symbol = currentChart.symbol || (currentChart.series[0]?.name ?? '')
-    const data = (currentChart.series[0]?.points || [])
-    const hasPoints = Array.isArray(data) && data.length > 0
+  type DisplayWindow = '1D' | '1W' | '1M' | '3M' | '1Y' | 'All'
 
-    const SvgFallback = () => {
-      const w = 680
-      const h = 220
-      const pad = 24
-      const xs = data.map((p, i) => i)
-      const ys = data.map((p) => Number(p.close))
-      const minY = Math.min(...ys)
-      const maxY = Math.max(...ys)
-      const minX = 0
-      const maxX = Math.max(1, xs.length - 1)
-      const sx = (i: number) => pad + ((w - pad * 2) * (i - minX)) / (maxX - minX || 1)
-      const sy = (v: number) => h - pad - ((h - pad * 2) * (v - minY)) / (maxY - minY || 1)
-      const d = data
-        .map((p, i) => `${i === 0 ? 'M' : 'L'} ${sx(i).toFixed(2)} ${sy(Number(p.close)).toFixed(2)}`)
-        .join(' ')
-      return (
-        <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img" aria-label={`${symbol} inline chart`}>
-          <rect x="0" y="0" width={w} height={h} fill="#ffffff" />
-          <path d={d} stroke="#10a37f" strokeWidth="2" fill="none" />
-        </svg>
-      )
+  function InlineLineChart({
+    spec,
+    messageKey,
+    selectionMap,
+  }: {
+    spec: Extract<ChartPayload, { type: 'line' }>
+    messageKey: string
+    selectionMap: Map<string, DisplayWindow>
+  }) {
+    const DISPLAY_WINDOWS: DisplayWindow[] = ['1D', '1W', '1M', '3M', '1Y', 'All']
+    const toDisplayWindow = (raw?: string | null): DisplayWindow => {
+      const value = (raw || '1D').toUpperCase()
+      if (value === '5D' || value === '1W') return '1W'
+      if (value === 'ALL' || value === '5Y') return 'All'
+      if (value === '3M') return '3M'
+      if (value === '1M') return '1M'
+      if (value === '1D') return '1D'
+      return '1Y'
     }
+    const toRequestWindow = useCallback((display: DisplayWindow) => {
+      if (display === 'All') return 'ALL'
+      return display
+    }, [])
+
+    const [chartState, setChartState] = useState(spec)
+    const [loadingWindow, setLoadingWindow] = useState<string | null>(null)
+    const [lastError, setLastError] = useState<string | null>(null)
+    const specSignature = useMemo(() => {
+      const primarySeries = spec.series?.[0] || { points: [] }
+      const pointsSummary = (primarySeries.points || []).map((entry: any) => `${entry.t}-${entry.close}`).join('|')
+      return `${spec.symbol || primarySeries.name || ''}|${spec.window || '1D'}|${pointsSummary}`
+    }, [spec])
+
+    const prevSpecSignatureRef = useRef<string | null>(null)
+
+    useEffect(() => {
+      if (prevSpecSignatureRef.current === specSignature) return
+      prevSpecSignatureRef.current = specSignature
+      const persisted = selectionMap.get(messageKey)
+      const desiredWindow = persisted || toDisplayWindow(spec.window)
+      const nextState = desiredWindow === toDisplayWindow(spec.window)
+        ? spec
+        : { ...spec, window: desiredWindow }
+      setChartState(nextState)
+      if (persisted) {
+        selectionMap.set(messageKey, desiredWindow)
+      }
+      setLastError(null)
+    }, [messageKey, selectionMap, spec, specSignature, toDisplayWindow])
+
+    const activeWindow = toDisplayWindow(chartState.window)
+    const symbol = chartState.symbol || chartState.series[0]?.name || spec.symbol || spec.series[0]?.name || ''
+    const points = chartState.series[0]?.points ?? []
+
+    const handleSelectWindow = useCallback(async (rawDisplayWindow: string) => {
+      if (!DISPLAY_WINDOWS.includes(rawDisplayWindow as any) || !symbol) return
+      const displayWindow = rawDisplayWindow as DisplayWindow
+      if (displayWindow === activeWindow) return
+      const previousWindow = activeWindow
+      setChartState((prev) => ({ ...prev, window: displayWindow }))
+      setLoadingWindow(displayWindow)
+      setLastError(null)
+      selectionMap.set(messageKey, displayWindow)
+      try {
+        const search = new URLSearchParams({
+          symbol,
+          window: toRequestWindow(displayWindow),
+        })
+        const response = await fetch(buildApiUrl(`charts/stock?${search.toString()}`), {
+          headers: { Accept: 'application/json' },
+          credentials: 'include',
+        })
+        if (!response.ok) {
+          throw new Error(`status ${response.status}`)
+        }
+        const payload = await response.json()
+        if (payload?.chart?.series) {
+          setChartState(payload.chart as Extract<ChartPayload, { type: 'line' }>)
+        }
+      } catch (error) {
+        console.error('chart.window.refresh_failed', error)
+        setLastError('We could not refresh this timeframe. Please try again.')
+        setChartState((prev) => ({ ...prev, window: previousWindow }))
+      } finally {
+        setLoadingWindow(null)
+      }
+    }, [DISPLAY_WINDOWS, activeWindow, messageKey, selectionMap, symbol, toRequestWindow])
+
+    useEffect(() => {
+      const desired = selectionMap.get(messageKey)
+      if (!desired) return
+      const current = toDisplayWindow(chartState.window)
+      if (desired !== current && !loadingWindow) {
+        setChartState((prev) => ({ ...prev, window: desired }))
+      }
+    }, [chartState.window, loadingWindow, messageKey, selectionMap, toDisplayWindow])
+
+    useEffect(() => {
+      return () => {
+        selectionMap.delete(messageKey)
+      }
+    }, [messageKey, selectionMap])
 
     return (
-      <div className="rounded-2xl border border-[var(--divider)] bg-white p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="text-sm font-semibold">{symbol}</div>
-          <div className="flex gap-1 text-xs">
-            {(['1D','1W','1M','3M','1Y','All'] as const).map((w) => (
-              <button key={w}
-                onClick={() => {
-                  // Update the window in the existing chart data instead of sending a new message
-                  const windowValue = w === '1W' ? '5D' : w === 'All' ? '5Y' : w
-                  const currentChart = (window as any).__SW_LAST_CHART__
-                  if (currentChart) {
-                    (window as any).__SW_LAST_CHART__ = { ...currentChart, window: windowValue }
-                    // Force a re-render by updating the trigger
-                    setChartUpdateTrigger(prev => prev + 1)
-                  }
-                }}
-                className={`rounded-lg border px-2 py-1 ${selWindow===w? 'border-[var(--divider)] bg-black/[0.03] text-[var(--text-primary)]':'border-[var(--divider)] bg-white text-[var(--text-tertiary)] hover:bg-black/[0.03]'}`}
-              >{w}</button>
-            ))}
+      <div className="space-y-2">
+        {lastError ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-700">
+            {lastError}
           </div>
-        </div>
-        <div className="h-64 w-full">
-          {hasPoints ? <SvgFallback /> : (
-            <div className="grid h-full place-items-center text-[12px] text-[var(--muted)]">No time‑series points</div>
-          )}
-        </div>
+        ) : null}
+        <StockLineCard
+          symbol={symbol}
+          points={points}
+          window={activeWindow}
+          availableWindows={DISPLAY_WINDOWS}
+          onSelectWindow={handleSelectWindow}
+          isLoading={!!loadingWindow}
+          headline={chartState.title}
+        />
       </div>
     )
   }
@@ -898,7 +946,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                           strokeWidth={1.1}
                         />
                       </BarChart>
-                    ) : (
+                    ) : chartSpec.type === 'scatter' ? (
                       <ScatterChart margin={{ top: 20, right: 36, bottom: 24, left: 32 }}>
                         <defs>
                           <radialGradient id="swScatter" cx="50%" cy="50%" r="50%">
@@ -937,7 +985,7 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                         <Legend wrapperStyle={{ color: 'var(--text-primary)' }} />
                         <Scatter data={chartSpec.data} fill="url(#swScatter)" line shape="circle" />
                       </ScatterChart>
-                    )}
+                    ) : <></>}
                   </ResponsiveContainer>
                 ) : (
                   <div className="grid h-full w-full place-items-center text-sm text-[var(--muted)]">Loading chart…</div>
@@ -1008,16 +1056,20 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                     </div>
                   ) : null}
                   {renderTableSection(m)}
-                  {isAssistant(m) && (m.chart || lastChart || (window as any).__SW_LAST_CHART__) && !m.followups?.some(f => f.toLowerCase().includes('chart')) ? (
+                  {isAssistant(m) && m.chart && !m.followups?.some((f) => f.toLowerCase().includes('chart')) ? (
                     (() => {
-                      const chartData = (m.chart as any) || lastChart || (window as any).__SW_LAST_CHART__
-                      const hasValidLineData = chartData && (
-                        chartData.type === 'line' || 
-                        hasLineSeries(chartData) ||
-                        (chartData.series && Array.isArray(chartData.series) && chartData.series.length > 0 && chartData.series[0]?.points)
-                      )
-                      if (hasValidLineData) {
-                        return <InlineLineChart spec={{ type: 'line', ...chartData }} updateTrigger={chartUpdateTrigger} />
+                      const chartData = m.chart as any
+                      const isLineChart = chartData && (chartData.type === 'line' || hasLineSeries(chartData))
+                      if (isLineChart) {
+                        const spec = chartData.type === 'line' ? chartData : { type: 'line', ...chartData }
+                        const messageKey = m.id ?? `inline-${i}`
+                        return (
+                          <InlineLineChart
+                            spec={spec}
+                            messageKey={messageKey}
+                            selectionMap={chartWindowSelections.current}
+                          />
+                        )
                       }
                       if (chartData?.data?.length) {
                         return (
@@ -1267,16 +1319,20 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
                     </div>
                   ) : null}
                   {renderTableSection(m)}
-                  {isAssistant(m) && (m.chart || lastChart || (window as any).__SW_LAST_CHART__) ? (
+                  {isAssistant(m) && m.chart ? (
                     (() => {
-                      const chartData = (m.chart as any) || lastChart || (window as any).__SW_LAST_CHART__
-                      const hasValidLineData = chartData && (
-                        chartData.type === 'line' || 
-                        hasLineSeries(chartData) ||
-                        (chartData.series && Array.isArray(chartData.series) && chartData.series.length > 0 && chartData.series[0]?.points)
-                      )
-                      if (hasValidLineData) {
-                        return <InlineLineChart spec={{ type: 'line', ...chartData }} updateTrigger={chartUpdateTrigger} />
+                      const chartData = m.chart as any
+                      const isLineChart = chartData && (chartData.type === 'line' || hasLineSeries(chartData))
+                      if (isLineChart) {
+                        const spec = chartData.type === 'line' ? chartData : { type: 'line', ...chartData }
+                        const messageKey = m.id ?? `inline-${i}`
+                        return (
+                          <InlineLineChart
+                            spec={spec}
+                            messageKey={messageKey}
+                            selectionMap={chartWindowSelections.current}
+                          />
+                        )
                       }
                       return null
                     })()

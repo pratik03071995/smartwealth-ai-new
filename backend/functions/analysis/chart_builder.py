@@ -35,7 +35,7 @@ def build_single_series_scatter(symbol: str, points: List[Dict]) -> Dict:
     }
 
 
-def build_single_series_line(symbol: str, points: List[Dict], *, window: str = "1Y") -> Dict:
+def build_single_series_line(symbol: str, points: List[Dict], *, window: str = "1D") -> Dict:
     """Return a ChartPayload (line) with timestamped points and common windows metadata.
 
     Frontend expects `type: 'line'`, xKey='t', yKey='close', and a `series` array.

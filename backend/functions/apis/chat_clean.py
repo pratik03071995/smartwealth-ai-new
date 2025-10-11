@@ -429,10 +429,12 @@ def _handle_database_query(
         from ..analysis.chart_builder import build_single_series_line
         import re
         # Extract window and symbol
-        window = '1Y'
+        window = '1D'
+        explicit_window = None
         for tag in ['1D','5D','1M','6M','YTD','1Y','2Y','5Y']:
             if tag.lower() in user_prompt.lower():
                 window = tag
+                explicit_window = tag
                 break
         raw_matches = re.findall(r'\b([A-Z]{2,5})\b', user_prompt.upper())
         STOP = {"SHOW","CHART","FOR","THE","A","AN","PRICE","STOCK","OF"}
@@ -454,8 +456,11 @@ def _handle_database_query(
                 "data_source": "database"
             }, request_id=request_id)
         chart = build_single_series_line(symbol, pts, window=window)
+        label = f"Here is the chart for {symbol}."
+        if explicit_window and explicit_window.upper() != '1D':
+            label = f"Here is the {explicit_window.upper()} chart for {symbol}."
         return finalize_response({
-            "reply": f"Here is the {window} chart for {symbol}.",
+            "reply": label,
             "chart": chart,
             "data_source": "database",
         }, request_id=request_id)
