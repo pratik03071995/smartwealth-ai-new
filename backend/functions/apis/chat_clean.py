@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Optional, Callable
+import re
+from typing import Any, Dict, Optional, Callable, List
+
+from ..analysis.symbol_resolver import extract_symbols_from_prompt
 from .llm_router import route_query_with_llm as route_query
 from .chat import (
     ChatPlan, _heuristic_plan_data, _augment_plan_with_prompt, _fetch_rows,
@@ -75,6 +78,30 @@ def _generate_session_title(user_prompt: str, assistant_reply: Optional[str]) ->
 def _truncate(text: str, limit: int = 180) -> str:
     cleaned = (text or "").replace("\n", " ").strip()
     return cleaned if len(cleaned) <= limit else f"{cleaned[: limit - 1]}…"
+
+
+def _extract_base_investment(prompt: str) -> float:
+    if not prompt:
+        return 100.0
+    # Look for dollar amounts first (e.g., $100, USD 250)
+    match = re.search(r'(?:\$|usd\s*)(\d{2,6}(?:\.\d{1,2})?)', prompt, flags=re.IGNORECASE)
+    if match:
+        try:
+            value = float(match.group(1))
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    # Fallback to standalone numbers mentioned with "invest" keywords
+    match = re.search(r'invest(?:ed|ing|\s)?\s*(?:\$)?(\d{2,6}(?:\.\d{1,2})?)', prompt, flags=re.IGNORECASE)
+    if match:
+        try:
+            value = float(match.group(1))
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return 100.0
 
 def finalize_response(
     resp: dict[str, Any],
@@ -442,63 +469,127 @@ def _handle_database_query(
 
     # Comparison path: use Databricks series repository directly
     if str(analysis.get('intent') or '').lower() == 'comparison' or str(analysis.get('search_type') or '') == 'database_compare':
-        from ..analysis.comparer import compare_symbols
-        from ..analysis.chart_builder import build_growth_bar_chart
+        from ..analysis.comparer import build_normalized_comparison
+        from ..analysis.chart_builder import build_multi_series_comparison
         from .chat import _llm_chat
         import re
 
-        # Extract symbols (support multi)
-        raw_matches = re.findall(r'\b([A-Z]{2,5})\b', user_prompt.upper())
-        seen = set()
-        symbols = []
-        for sym in raw_matches:
-            if sym not in seen:
-                seen.add(sym)
-                symbols.append(sym)
-        if len(symbols) < 2:
-            name_map = { 'TESLA':'TSLA','APPLE':'AAPL','MICROSOFT':'MSFT','GOOGLE':'GOOGL','ALPHABET':'GOOGL','AMAZON':'AMZN','META':'META','NVIDIA':'NVDA','NETFLIX':'NFLX'}
-            for name, sym in name_map.items():
-                if name.lower() in user_prompt.lower():
-                    if sym not in seen:
-                        seen.add(sym)
-                        symbols.append(sym)
+        symbols_from_prompt = extract_symbols_from_prompt(user_prompt)
+        if analysis.get('symbols'):
+            for sym in analysis['symbols']:
+                sym_norm = (sym or '').upper()
+                if sym_norm and sym_norm not in symbols_from_prompt:
+                    symbols_from_prompt.append(sym_norm)
+
+        def _resolve_symbol_list(prompt: str) -> List[str]:
+            primaries = list(dict.fromkeys(symbols_from_prompt))
+            if len(primaries) >= 2:
+                return primaries
+            llm_symbols: List[str] = []
+            try:
+                extraction = _llm_chat([
+                    {"role": "system", "content": "Extract stock tickers."},
+                    {
+                        "role": "user",
+                        "content": (
+                            "List up to five U.S. stock tickers mentioned in this question. "
+                            "Respond with comma separated tickers only.\n\n"
+                            f"Question: {prompt}"
+                        ),
+                    },
+                ], temperature=0.0, max_tokens=24)
+                if extraction:
+                    llm_symbols = extract_symbols_from_prompt(extraction)
+            except Exception:
+                llm_symbols = []
+            combined = primaries + [sym for sym in llm_symbols if sym not in primaries]
+            return list(dict.fromkeys(combined))
+
+        symbols = _resolve_symbol_list(user_prompt)
         if len(symbols) < 2:
             return finalize_response({
-                "reply": "Please specify at least two tickers to compare (e.g., AAPL, MSFT).",
-                "data_source": "database"
+                "reply": "Please specify at least two valid tickers to compare (e.g., TSLA, META).",
+                "data_source": "database",
             }, request_id=request_id)
 
-        # Parse timeframe
-        timeframe = '2Y'
-        for tag in ['1D','5D','1M','6M','YTD','1Y','2Y','5Y']:
-            if tag.lower() in user_prompt.lower():
+        timeframe = '1Y'
+        for tag in ['1D', '5D', '1M', '3M', '6M', 'YTD', '1Y', '2Y', '5Y']:
+            if re.search(rf"\b{tag}\b", user_prompt, flags=re.IGNORECASE):
                 timeframe = tag
                 break
+
+        base_investment = _extract_base_investment(user_prompt)
 
         if stream_handler:
             try:
                 stream_handler("\x00STATUS:Fetching data from database…")
             except Exception:
                 pass
-        table, bar_data, preview = compare_symbols(symbols, timeframe)
+
+        comparison = build_normalized_comparison(symbols, timeframe, base_investment=base_investment)
+        included_symbols = comparison.get('availableSymbols') or comparison.get('symbols') or []
+        if len(included_symbols) < 2:
+            removed = comparison.get('removedSymbols') or []
+            removed_msg = f" (no overlapping data for {', '.join(removed)})" if removed else ''
+            return finalize_response({
+                "reply": f"I need at least two symbols with overlapping data to compare{removed_msg}.",
+                "data_source": "database",
+            }, request_id=request_id)
+
+        table = comparison.get('table')
+        preview = comparison.get('tablePreview')
+
         if stream_handler:
             try:
-                stream_handler("\x00STATUS:Generating chart…")
+                stream_handler("\x00STATUS:Preparing summary…")
             except Exception:
                 pass
-        chart = build_growth_bar_chart(bar_data)
-        md_lines = ["| Symbol | Growth % |", "|---|---:|"]
-        for r in bar_data:
-            md_lines.append(f"| {r['label']} | {r['value']:.2f}% |")
+
+        summary_rows = comparison.get('summary') or []
+        lines = ["Symbol | Final Value | Return %", "---|---|---"]
+        for row in summary_rows:
+            symbol = row.get('symbol') or 'N/A'
+            final_val = row.get('finalInvestment')
+            return_pct = row.get('returnPct')
+            final_val_display = f"${final_val:,.2f}" if isinstance(final_val, (int, float)) else 'n/a'
+            return_pct_display = f"{return_pct:.2f}%" if isinstance(return_pct, (int, float)) else 'n/a'
+            lines.append(f"{symbol} | {final_val_display} | {return_pct_display}")
+
+        summary_prompt = (
+            "You are a financial analyst. Compare the normalized investment outcomes below. "
+            "Each figure reflects how a $100 investment evolved over the selected window. "
+            "Highlight leaders, laggards, and notable spreads in 2-3 concise sentences.\n\n"
+            + "\n".join(lines)
+        )
+
         answer = _llm_chat([
-            {"role": "system", "content": "You are a financial analyst. Summarize briefly and objectively."},
-            {"role": "user", "content": "\n".join(md_lines)},
-        ], temperature=0.2, max_tokens=180, stream_handler=stream_handler)
+            {"role": "system", "content": "You are a precise financial analyst."},
+            {"role": "user", "content": summary_prompt},
+        ], temperature=0.2, max_tokens=220, stream_handler=stream_handler)
+
+        chart = build_multi_series_comparison(
+            series=comparison.get('series') or [],
+            title="Normalized Investment Comparison",
+            base_investment=comparison.get('baseInvestment', base_investment),
+            window=comparison.get('window', timeframe),
+            available_windows=['1M', '3M', '6M', '1Y', '2Y', '5Y'],
+        )
+
         return finalize_response({
             "reply": answer,
             "table": table,
             "tablePreview": preview,
             "chart": chart,
+            "comparison": {
+                "baseInvestment": comparison.get('baseInvestment'),
+                "start": comparison.get('start'),
+                "end": comparison.get('end'),
+                "symbols": comparison.get('symbols'),
+                "availableSymbols": comparison.get('availableSymbols'),
+                "removedSymbols": comparison.get('removedSymbols'),
+                "window": comparison.get('window'),
+                "summary": summary_rows,
+            },
             "data_source": "database",
         }, request_id=request_id)
 

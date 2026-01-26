@@ -22,6 +22,11 @@ function buildPath(pts: { x: number; y: number }[], w: number, h: number, pad = 
     .join(' ')
 }
 
+function round(num: number, places: number) {
+  const factor = 10 ** places
+  return Math.round(num * factor) / factor
+}
+
 export default function ChartPortalOverlay() {
   const [open, setOpen] = React.useState(true)
   const [chart, setChart] = React.useState<any>(null)

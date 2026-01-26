@@ -25,7 +25,7 @@ from .apis.chat_sessions import (
     delete_chat_session,
     list_chat_session_messages,
 )
-from .apis.charts import stock_chart
+from .apis.charts import stock_chart, comparison_chart
 from .apis.auth import (
     login as auth_login,
     logout as auth_logout,
@@ -45,6 +45,7 @@ __all__ = [
     "delete_chat_session",
     "list_chat_session_messages",
     "stock_chart",
+    "comparison_chart",
     "earnings_week",
     "earnings_all",
     "earnings",

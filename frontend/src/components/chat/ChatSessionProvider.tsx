@@ -31,6 +31,12 @@ export type ChartPayload =
       window?: string
       availableWindows?: string[]
       symbol?: string
+      comparison?: {
+        baseInvestment?: number
+        symbols?: string[]
+        window?: string
+        summary?: { symbol: string; finalInvestment?: number; returnPct?: number; absoluteReturn?: number }[]
+      }
     }
 
 export type SystemStatus = 'checking' | 'ready' | 'degraded' | 'unavailable'
@@ -70,6 +76,7 @@ export type AssistantMsg = {
   llmSource?: string | null
   llmSourceRaw?: string | null
   searchProvider?: string | null
+  comparison?: Record<string, unknown> | null
 }
 
 export type UserMsg = { role: 'user'; text: string }

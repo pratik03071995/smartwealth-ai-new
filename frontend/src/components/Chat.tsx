@@ -15,6 +15,7 @@ import {
   Line,
 } from 'recharts'
 import StockLineCard from './charts/StockLineCard'
+import ComparisonLineCard from './charts/ComparisonLineCard'
 import { buildApiUrl } from '../services/api'
 
 import {
@@ -580,6 +581,15 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     messageKey: string
     selectionMap: Map<string, DisplayWindow>
   }) {
+    if ((spec.series?.length || 0) > 1 || (spec as any)?.comparison) {
+      return (
+        <ComparisonInlineChart
+          spec={spec}
+          messageKey={messageKey}
+        />
+      )
+    }
+
     const DISPLAY_WINDOWS: DisplayWindow[] = ['1D', '1W', '1M', '3M', '1Y', 'All']
     const toDisplayWindow = (raw?: string | null): DisplayWindow => {
       const value = (raw || '1D').toUpperCase()
@@ -694,6 +704,159 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     )
   }
 
+  function ComparisonInlineChart({
+    spec,
+    messageKey,
+  }: {
+    spec: Extract<ChartPayload, { type: 'line' }>
+    messageKey: string
+  }) {
+    const defaultSymbols = (spec.series || []).map((s) => s.name).filter(Boolean) as string[]
+    const meta = (spec as any)?.comparison || {}
+    const initialWindow = (meta.window || spec.window || '1Y').toString().toUpperCase()
+    const persisted = comparisonSelections.current.get(messageKey)
+
+    const [chartState, setChartState] = useState(spec)
+    const [comparisonMeta, setComparisonMeta] = useState(meta)
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+
+    const [state, setState] = useState<{ window: string; symbols: string[] }>(() => ({
+      window: persisted?.window || initialWindow,
+      symbols: persisted?.symbols || (meta.availableSymbols || meta.symbols || defaultSymbols || []),
+    }))
+
+    const stateRef = useRef(state)
+
+    useEffect(() => {
+      comparisonSelections.current.set(messageKey, state)
+    }, [messageKey, state])
+
+    const specSignature = useMemo(() => {
+      const pointsSignature = (spec.series || [])
+        .map((entry) => `${entry.name}:${(entry.points || []).length}`)
+        .join(';')
+      return `${pointsSignature}|${spec.window}`
+    }, [spec])
+
+    const previousSignature = useRef<string | null>(null)
+    useEffect(() => {
+      if (previousSignature.current === specSignature) return
+      previousSignature.current = specSignature
+      setChartState(spec)
+      setComparisonMeta((spec as any)?.comparison || {})
+      if (!persisted) {
+        const symbols = ((spec as any)?.comparison?.symbols || defaultSymbols || []) as string[]
+        setState({ window: initialWindow, symbols })
+      }
+      setError(null)
+    }, [spec, specSignature, persisted, defaultSymbols, initialWindow])
+
+    const availableWindows = chartState.availableWindows && chartState.availableWindows.length
+      ? chartState.availableWindows
+      : ['1M', '3M', '6M', '1Y', '2Y', '5Y']
+
+    useEffect(() => {
+      stateRef.current = state
+    }, [state])
+
+    const requestComparison = useCallback(async (nextWindow: string, symbols: string[]) => {
+      if (symbols.length < 2) return
+      const previous = stateRef.current
+      setLoading(true)
+      setError(null)
+      try {
+        const search = new URLSearchParams({
+          window: nextWindow,
+          symbols: symbols.join(','),
+        })
+        const response = await fetch(buildApiUrl(`charts/compare?${search.toString()}`), {
+          headers: { Accept: 'application/json' },
+          credentials: 'include',
+        })
+        if (!response.ok) {
+          throw new Error(`status ${response.status}`)
+        }
+        const payload = await response.json()
+        if (payload?.chart) {
+          setChartState(payload.chart as Extract<ChartPayload, { type: 'line' }>)
+        }
+        if (payload?.comparison) {
+          setComparisonMeta(payload.comparison)
+          const available = (payload.comparison.availableSymbols || symbols) as string[]
+          const windowValue = (payload.comparison.window || nextWindow).toString().toUpperCase()
+          setState({ window: windowValue, symbols: available })
+          comparisonSelections.current.set(messageKey, {
+            window: windowValue,
+            symbols: available,
+          })
+        } else {
+          setState({ window: nextWindow, symbols })
+          comparisonSelections.current.set(messageKey, {
+            window: nextWindow,
+            symbols,
+          })
+        }
+      } catch (err) {
+        console.error('comparison.refresh_failed', err)
+        setError('Unable to refresh comparison. Please try again.')
+        setState(previous)
+        comparisonSelections.current.set(messageKey, previous)
+      } finally {
+        setLoading(false)
+      }
+    }, [messageKey])
+
+    const handleSelectWindow = useCallback(async (nextWindow: string) => {
+      const normalized = nextWindow.toUpperCase()
+      if (normalized === stateRef.current.window || loading) return
+      await requestComparison(normalized, stateRef.current.symbols)
+    }, [loading, requestComparison])
+
+    const handleRemoveSymbol = useCallback(async (symbol: string) => {
+      const current = stateRef.current
+      if (current.symbols.length <= 2) return
+      const nextSymbols = current.symbols.filter((s) => s !== symbol)
+      await requestComparison(current.window, nextSymbols)
+    }, [requestComparison])
+
+    const activeSeries = chartState.series || []
+    const summaryRows = (comparisonMeta?.summary || []) as Array<{
+      symbol: string
+      finalInvestment?: number
+      returnPct?: number
+      absoluteReturn?: number
+    }>
+
+    useEffect(() => {
+      return () => {
+        comparisonSelections.current.delete(messageKey)
+      }
+    }, [messageKey])
+
+    return (
+      <div className="space-y-3">
+        {error ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2 text-xs text-amber-700">
+            {error}
+          </div>
+        ) : null}
+        <ComparisonLineCard
+          series={activeSeries.map((entry) => ({ name: entry.name || '', points: entry.points || [] }))}
+          window={state.window}
+          availableWindows={availableWindows}
+          onSelectWindow={handleSelectWindow}
+          isLoading={loading}
+          baseInvestment={comparisonMeta?.baseInvestment ?? 100}
+          summary={summaryRows}
+          activeSymbols={state.symbols}
+          excludedSymbols={(comparisonMeta?.removedSymbols as string[]) || []}
+          onRemoveSymbol={state.symbols.length > 2 ? handleRemoveSymbol : undefined}
+        />
+      </div>
+    )
+  }
+
   function hasLineSeries(spec: any): spec is { series: { name: string; points: { t: string; close: number }[] }[] } {
     return !!spec && Array.isArray(spec.series) && spec.series.length > 0 && Array.isArray(spec.series[0]?.points)
   }
@@ -704,6 +867,8 @@ export default function Chat({ variant = 'full', className }: ChatProps) {
     setGraphReady(false)
     setTimeout(() => setGraphReady(true), 40)
   }
+
+  const comparisonSelections = useRef(new Map<string, { window: string; symbols: string[] }>())
 
   const handleClearConversation = useCallback(() => {
     clearConversation()

@@ -5,8 +5,9 @@ from typing import Dict, List
 
 from flask import request
 
-from ..analysis.chart_builder import build_single_series_line
+from ..analysis.chart_builder import build_single_series_line, build_multi_series_comparison
 from ..analysis.timeseries_repository import fetch_series
+from ..analysis.comparer import build_normalized_comparison
 
 
 def _normalize_window(raw: str | None) -> str:
@@ -116,3 +117,46 @@ def stock_chart() -> tuple[dict, int]:
 
     chart = build_single_series_line(symbol, points, window=requested_window)
     return {"chart": chart}, 200
+
+
+def comparison_chart() -> tuple[dict, int]:
+    raw_symbols = request.args.getlist("symbols")
+    if not raw_symbols:
+        raw = (request.args.get("symbols") or "").strip()
+        if raw:
+            raw_symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+
+    symbols = [s.strip().upper() for s in raw_symbols if s.strip()]
+    if len(symbols) < 2:
+        return {"error": "two_symbols_required"}, 400
+
+    window = (request.args.get("window") or "1Y").strip().upper()
+    base = request.args.get("baseInvestment")
+    try:
+        base_investment = float(base) if base is not None else 100.0
+    except ValueError:
+        base_investment = 100.0
+
+    comparison = build_normalized_comparison(symbols, window, base_investment=base_investment)
+    chart = build_multi_series_comparison(
+        series=comparison.get('series') or [],
+        title="Normalized Investment Comparison",
+        base_investment=comparison.get('baseInvestment', base_investment),
+        window=comparison.get('window', window),
+        available_windows=['1M', '3M', '6M', '1Y', '2Y', '5Y'],
+    )
+    return {
+        "chart": chart,
+        "comparison": {
+            "summary": comparison.get('summary'),
+            "table": comparison.get('table'),
+            "tablePreview": comparison.get('tablePreview'),
+            "start": comparison.get('start'),
+            "end": comparison.get('end'),
+            "baseInvestment": comparison.get('baseInvestment'),
+            "symbols": comparison.get('symbols'),
+            "availableSymbols": comparison.get('availableSymbols'),
+            "removedSymbols": comparison.get('removedSymbols'),
+            "window": comparison.get('window'),
+        },
+    }, 200

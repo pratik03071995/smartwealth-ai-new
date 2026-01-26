@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Dict
+from typing import List, Dict, Any
 
 
 def build_growth_bar_chart(symbol_values: List[Dict]) -> Dict:
@@ -58,4 +58,39 @@ def build_single_series_line(symbol: str, points: List[Dict], *, window: str = "
         "window": window,
         "availableWindows": ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"],
         "symbol": symbol,
+    }
+
+
+def build_multi_series_comparison(
+    *,
+    series: List[Dict[str, Any]],
+    title: str,
+    base_investment: float,
+    window: str,
+    available_windows: List[str],
+) -> Dict[str, Any]:
+    """Construct a multi-series line chart payload for normalized investment comparison."""
+    cleaned_series = []
+    for entry in series:
+        name = entry.get("name")
+        pts = entry.get("points") or []
+        cleaned_points = [
+            {"t": p.get("t"), "close": float(p.get("close"))}
+            for p in pts
+            if p.get("t") and p.get("close") is not None
+        ]
+        cleaned_series.append({"name": name, "points": cleaned_points})
+
+    return {
+        "type": "line",
+        "title": title,
+        "xKey": "t",
+        "yKey": "close",
+        "format": {"y": "currency"},
+        "series": cleaned_series,
+        "window": window,
+        "availableWindows": available_windows,
+        "comparison": {
+            "baseInvestment": base_investment,
+        },
     }
